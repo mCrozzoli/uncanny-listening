@@ -15,7 +15,7 @@ Layout and legend: after Dark Re-wilding's web display (Miguel Angel Crozzoli wi
   manual C5 §19, modelled on Dark Skyr).
 
 DATA
-None is published. The page holds no audio and no data: each researcher opens her own folders, analysed in the
+None is published. The page holds no audio and no data: each researcher opens their own folders, analysed in the
   browser; nothing is uploaded. The tests read the researcher's corpus in place on the developer's machine.
 
 SOFTWARE PORTED TO JAVASCRIPT (no library shipped; each tested against the original, see TESTS in the repository)

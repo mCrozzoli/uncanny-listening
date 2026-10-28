@@ -25,11 +25,25 @@ export const ANA_PRESET = {
   sr: 44100, nFft: 2048, hop: 512, window_s: 10, overlap: 0,
   normalize: "peak", clip: true, format: "flac",
   rolloff_percent: 0.85, contrast_bands: 1, n_mfcc: 1,
+  // the descriptor families, each on / off (Miguel 2026-10-28, as DarkLibrosa's extract config); all on = her preset
+  families: { zcr: true, rms: true, spectral: true, contrast: true, flux: true, mfcc: true, chroma: true, rhythm: true },
 };
+// the frame features of a configuration, in her preset's column order (spectral contrast: n_bands + 1 rows, as librosa)
+const FAM_OF = { zcr: "zcr", rms: "rms", spectral_centroid: "spectral", spectral_bandwidth: "spectral", spectral_rolloff: "spectral",
+  spectral_flatness: "spectral", spectral_flux: "flux", mfcc_0: "mfcc", chroma: "chroma" };
+export function featuresOf(cfg = ANA_PRESET) {
+  const on = { ...ANA_PRESET.families, ...(cfg.families || {}) }, nb = cfg.contrast_bands ?? 1, out = [];
+  for (const f of ["zcr", "rms", "spectral_centroid", "spectral_bandwidth", "spectral_rolloff", "spectral_flatness"]) if (on[FAM_OF[f]]) out.push(f);
+  if (on.contrast) for (let k = 0; k <= nb; k++) out.push(`spectral_contrast_${k}`);
+  for (const f of ["spectral_flux", "mfcc_0", "chroma"]) if (on[FAM_OF[f]]) out.push(f);
+  return out;
+}
 export const FEATURES = ["zcr", "rms", "spectral_centroid", "spectral_bandwidth", "spectral_rolloff", "spectral_flatness",
   "spectral_contrast_0", "spectral_contrast_1", "spectral_flux", "mfcc_0", "chroma"];
 export const STATS = ["mean", "median", "std", "min", "max"];
-export const COLUMNS = [...FEATURES.flatMap((f) => STATS.map((s) => `${f}_${s}`)), "tempo", "n_beats", "beat_density"];
+export const columnsOf = (cfg = ANA_PRESET) => [...featuresOf(cfg).flatMap((f) => STATS.map((s) => `${f}_${s}`)),
+  ...({ ...ANA_PRESET.families, ...(cfg.families || {}) }.rhythm ? ["tempo", "n_beats", "beat_density"] : [])];
+export const COLUMNS = columnsOf(ANA_PRESET);
 // The extras (Miguel 2026-10-28, opt-in, as DarkLibrosa's config: mel_features.mfcc.n_mfcc, chroma.chromagram aggregate
 // false): every MFCC above mfcc_0 (n_mfcc − 1 more, from the same mel spectrogram, DCT-II ortho) and the 12 chroma classes
 // (the same chroma_stft, before the mean). Her preset's columns are computed exactly as before; these are added beside them.
@@ -78,7 +92,7 @@ function makeExtractor(cfg) {
   return function extract(y, off, n) {
     const T = 1 + Math.floor(n / hop), F = {};
     const XF = extraFeatures(cfg.extras);
-    for (const f of [...FEATURES, ...XF]) F[f] = new Float64Array(T);
+    for (const f of [...FEATURES, ...featuresOf({ ...cfg, families: { contrast: true } }), ...XF]) F[f] = new Float64Array(T);   // every frame feature is computed; the summary keeps the families that are on
     // time domain: zcr (frame 2048, centre, edge padding, threshold 1e-10) and rms (frame 2048, centre, zero padding)
     for (let t = 0; t < T; t++) {
       const s0 = t * hop - 1024; let cnt = 0, prev = null, e = 0;
@@ -132,9 +146,10 @@ function makeExtractor(cfg) {
     const nmf = cfg.extras && cfg.extras.mfcc > 1 ? cfg.extras.mfcc : 0;
     if (nmf) { const ck = Math.sqrt(2 / nM), cosT = Array.from({ length: nmf }, (_, k) => Float64Array.from({ length: nM }, (_, i) => Math.cos(Math.PI / nM * (i + 0.5) * k)));
       for (let t = 0; t < T; t++) for (let k = 1; k < nmf; k++) { let s = 0; const ct = cosT[k]; for (let i = 0; i < nM; i++) s += mel[t * nM + i] * ct[i]; F[`mfcc_${k}`][t] = s * ck; } }
-    const env = F.spectral_flux, lagPad = 1 + Math.floor(2048 / (2 * hop));   // onset_strength: lag 1, centre: pad lag + n_fft // (2 hop)
+    const env = F.spectral_flux, lagPad = 1 + Math.floor(nFft / (2 * hop));   // onset_strength: lag 1, centre: pad lag + n_fft // (2 hop)
     for (let t = 1; t < T; t++) { let a = 0; for (let i = 0; i < nM; i++) a += Math.max(0, mel[t * nM + i] - mel[(t - 1) * nM + i]); const j = t - 1 + lagPad; if (j < T) env[j] = a / nM; }
     // pass 2: chroma_stft with this window's tuning, ∞-normalised per frame, then the mean of the 12 classes
+    if (cfg.families && cfg.families.chroma === false && !F.chroma_0) return F;   // no chroma asked: skip the pass
     const CH = chromaFilter(sr, nFft, tuning32(pitches, mags)), raw = new Float64Array(12);
     for (let t = 0; t < T; t++) {
       frameMag(y, off, n, t); for (let b = 0; b < NB; b++) pw[b] = mag[b] * mag[b];
@@ -147,9 +162,9 @@ function makeExtractor(cfg) {
 }
 
 // numpy's mean / median / std (ddof 0) / min / max over the frames
-function summarize(F, extra = []) {
+function summarize(F, feats) {                                   // feats: the configuration's features (+ the extras)
   const row = {};
-  for (const f of [...FEATURES, ...extra]) {
+  for (const f of feats) {
     const x = F[f], n = x.length; let s = 0, lo = Infinity, hi = -Infinity;
     for (let i = 0; i < n; i++) { s += x[i]; if (x[i] < lo) lo = x[i]; if (x[i] > hi) hi = x[i]; }
     const m = s / n; let v = 0; for (let i = 0; i < n; i++) v += (x[i] - m) ** 2;
@@ -214,11 +229,13 @@ export function analyseFile(yNat, srNat, cfg = ANA_PRESET, onProgress = null) {
   if (cfg.normalize === "peak" && peak > 0) for (let i = 0; i < y.length; i++) y[i] = y[i] / peak;   // float32 division, as numpy
   if (cfg.clip) for (let i = 0; i < y.length; i++) y[i] = Math.max(-1, Math.min(1, y[i]));
   const n = y.length, duration = n / sr, extract = makeExtractor(cfg);
-  const Fw = extract(y, 0, n), l0 = Object.assign({ window_start: 0, window_end: duration }, summarize(Fw, extraFeatures(cfg.extras)));
-  const rhythm = { tempo: globalTempo(Fw.spectral_flux, sr, cfg.hop) };
-  rhythm.n_beats = countOnsets(Fw.spectral_flux, sr, cfg.hop); rhythm.beat_density = duration > 0 ? rhythm.n_beats / duration : 0;
+  const FE = [...featuresOf(cfg), ...extraFeatures(cfg.extras)], fam = { ...ANA_PRESET.families, ...(cfg.families || {}) };
+  const Fw = extract(y, 0, n), l0 = Object.assign({ window_start: 0, window_end: duration }, summarize(Fw, FE));
+  const rhythm = {};
+  if (fam.rhythm) { rhythm.tempo = globalTempo(Fw.spectral_flux, sr, cfg.hop);
+    rhythm.n_beats = countOnsets(Fw.spectral_flux, sr, cfg.hop); rhythm.beat_density = duration > 0 ? rhythm.n_beats / duration : 0; }
   Object.assign(l0, rhythm);
   const W = windows(n, sr, cfg.window_s, cfg.overlap), l1 = [];
-  W.forEach(([a, b], i) => { l1.push(Object.assign({ window_start: a / sr, window_end: b / sr }, summarize(extract(y, a, b - a), extraFeatures(cfg.extras)), rhythm)); if (onProgress) onProgress(i + 1, W.length); });
+  W.forEach(([a, b], i) => { l1.push(Object.assign({ window_start: a / sr, window_end: b / sr }, summarize(extract(y, a, b - a), FE), rhythm)); if (onProgress) onProgress(i + 1, W.length); });
   return { duration, sr_native: srNat, peak, l0, l1 };   // peak: of the mono mix before normalising (the page's level matching)
 }

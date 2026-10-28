@@ -41,9 +41,11 @@ input[type=number] { width: 4em; background: var(--ds-ctl); color: var(--ds-txt)
 
 /* body: the perceptual legend (left) · the workspace · the controls (right) · the Live panel (far right) */
 #app { flex: 1; display: flex; min-height: 0; position: relative; }
-#side { position: relative; width: 268px; flex: none; background: var(--ds-panel); border-left: 1px solid var(--ds-line); padding: 12px 12px 20px; overflow-y: auto; }
-body.side-closed #side { width: 0; padding: 0; border: 0; overflow: visible; }
-body.side-closed #side > :not(#sidetab) { display: none; }
+/* #side does not scroll (its edge tab sits outside its box and would be clipped, Miguel 10-28); #sidein scrolls */
+#side { position: relative; width: 268px; flex: none; background: var(--ds-panel); border-left: 1px solid var(--ds-line); display: flex; flex-direction: column; min-height: 0; }
+#sidein { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 12px 20px; }
+body.side-closed #side { width: 0; border: 0; }
+body.side-closed #sidein { display: none; }
 /* edge tabs (re-wilding's idiom): vertical, on the panel's edge — hide · i on the controls, legend · L on the left */
 .edgetab { writing-mode: vertical-rl; font: inherit; font-size: 10px; letter-spacing: .14em; color: var(--ds-dim); background: var(--ds-panel); cursor: pointer;
   border: 1px solid var(--ds-line); padding: 10px 3px; z-index: 6; }
@@ -256,3 +258,18 @@ body.leg-open .ltab { left: 360px; }
 #pipe .xh .btn { min-width: 44px; }
 #pipe .xrow > .k { display: block; }
 #pipe .xm { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* setup rows (Miguel 10-28): name + one-line note on the left; knobs, then on / off (or a fixed value), on the same line */
+.srow { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line, rgba(127,127,127,.25)); flex-wrap: wrap; }
+.srow .sl { flex: 1 1 140px; min-width: 0; display: flex; flex-direction: column; }
+.srow .sl .k { line-height: 1.25; }
+.srow .sr { display: flex; align-items: center; gap: 6px; flex: none; margin-left: auto; }
+.srow .sr .btn.tog { min-width: 40px; }
+.srow .fixedv { font-size: 11px; color: var(--ds-dim); }
+.srow .knob svg { width: 34px; height: 34px; }
+.srow .knob .kl { min-height: 0; margin: 0; font-size: 9px; }
+.srow .knob .kn { font-size: 9px; }
+.srow.off .sl b { color: var(--ds-dim); }
+.srow > .xm { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px; }
+#setup .sub { margin: 10px 0 2px; text-transform: uppercase; letter-spacing: .12em; font-size: 10px; }
+#presethead { margin: 2px 0 4px; } #presethead .changed { color: var(--ds-cur-txt, #c80); }

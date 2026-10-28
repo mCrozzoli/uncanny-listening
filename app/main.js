@@ -13,7 +13,10 @@ import { audioSeconds } from "./decode.js";
 import { makeMaps } from "./maps.js";
 import { knob } from "./knob.js";
 import * as player from "./player.js";
-import { COLUMNS, ANA_PRESET, extraColumns } from "../core/darklibrosa.js";
+import { COLUMNS, ANA_PRESET, extraColumns, columnsOf } from "../core/darklibrosa.js";
+// the editable part of the preset (Miguel 10-28: switches and knobs; defaults = her preset, segments fixed at 10 s)
+const PRESET0 = (({ sr, nFft, hop, normalize, clip, rolloff_percent, contrast_bands, families }) =>
+  ({ sr, nFft, hop, normalize, clip, rolloff_percent, contrast_bands, families: { ...families } }))(ANA_PRESET);
 import { flacHeader } from "../core/flac.js";
 import { decodeMono } from "./decode.js";
 import { pipeline, alignLabels, alignAny } from "../core/analysis.js";
@@ -55,7 +58,9 @@ export const S = (window.UL = {
   sel: new Set(), hover: null, trace: [], brushed: null, k: null,
   pipe: { minmax: true, pca: true, density: true },             // the transformations, each on / off (Miguel 2026-10-28)
   clu: { kmeans: true, dbscan: false, agglomerative: false, gmm: false, spectral: false, hdbscan: false },   // default: k-means only (her method)
-  cluster: { show: "kmeans", eps: null, minSamples: 5 },          // which clustering the maps show; DBSCAN's eps (null = k-distance) and min samples
+  cluster: { show: "kmeans", eps: null, minSamples: 5, mcs: 10 },          // which clustering the maps show; DBSCAN's eps (null = k-distance) and min samples
+  preset: structuredClone(PRESET0),
+  kOf: { agglomerative: null, gmm: null, spectral: null },        // each clustering's own k (null = the number of classes)
   extras: { mfcc: { on: false, n: 13 }, chroma12: { on: false }, clap: { on: false, model: "music_and_speech" } },
   overrides: [],            // labels by ear, in order: {id, name, folder, from, to, at}
   model: { gains: Object.fromEntries(FAMILIES.map(([f]) => [f, 1])), C: 1, thr: 0.5, res: null, flips: null, cause: null, n: 0 },
@@ -115,7 +120,8 @@ function runOthers() {
   w.onmessage = (ev) => { w.terminate(); if (id !== othersId || !S.analysis) return;
     ev.data.results.forEach((r, j) => { const m = ms[j]; if (r.error) S.analysis.cluErr[m] = r.error; else S.songs.forEach((s, i) => { s.clu[m] = r.labels[i]; }); });
     S.analysis.pending = null; realign(); renderAll(); };
-  w.postMessage({ id, rows: S.analysis.scaled, k: S.analysis.k, y: S.songs.map(labelOf), methods: ms.map((m) => ({ ...OTHER[m], label: CLU[m] })) });
+  w.postMessage({ id, rows: S.analysis.scaled, k: S.analysis.k, y: S.songs.map(labelOf),
+    methods: ms.map((m) => ({ ...OTHER[m], label: CLU[m], ...(m === "hdbscan" ? { min_cluster_size: S.cluster.mcs } : { k: S.kOf[m] || S.analysis.classes.length }) })) });
 }
 
 // ------------------------------------------------------------------ folders → classes
@@ -175,7 +181,9 @@ async function analyse() {
   S.analysis = null; S.sel.clear(); S.trace = []; S.brushed = null; S.overrides = []; S.model.res = null; S.model.flips = null; S.clusterings = null;
   S.running = true; S.stop = false; renderAll(); $("#cancel").hidden = false;
   const status = $("#status"), bar = $("#bar i"), t0 = performance.now();
-  const r = await analyseSongs(S.songs, { cfg: { extras: xcfg },
+  if (!columnsOf(S.preset).length && !xcfg.mfcc && !xcfg.chroma12 && !X.clap.on) { $("#status").textContent = t("no_features"); return; }
+  const usedPreset = structuredClone(S.preset);
+  const r = await analyseSongs(S.songs, { cfg: { ...usedPreset, extras: xcfg },
     onSong: (song, res) => Object.assign(song, res),
     onProgress: (p) => { if (p.finished != null) { status.textContent = t("decoding", { i: p.finished, n: p.n, name: p.song ? p.song.name : "" }); bar.style.width = `${100 * p.finished / p.n}%`; renderChip(); $("#cardstatus").textContent = status.textContent; } },
     cancelled: () => S.stop,
@@ -185,7 +193,7 @@ async function analyse() {
   status.textContent = t("done_in", { n: good.length, m: nSeg, s: fmtT((performance.now() - t0) / 1000) }) + (bad.length ? " · " + t("failed", { n: bad.length }) : "");
   $("#errors").innerHTML = bad.map((s) => `<div>✗ ${esc(s.name)} — ${esc(String(s.error || "").split("\n")[0])}</div>`).join("");
   S.songs = good;
-  FEATS = [...COLUMNS, ...extraColumns(xcfg)];
+  FEATS = [...columnsOf(usedPreset), ...extraColumns(xcfg)]; S.usedPreset = usedPreset;
   if (good.length && !S.stop && X.clap.on) { try { await runClap(good); } catch (e) { $("#errors").innerHTML += `<div>✗ CLAP — ${esc(String(e.message || e))}</div>`; } }
   if (good.length && !S.stop) { process(); S.view.tab = "view"; S.view.left = null; S.view.card = false; }
   renderAll();
@@ -276,7 +284,7 @@ function applyModel(r) {
 }
 
 // ------------------------------------------------------------------ maps
-const mapDefs = () => [...(S.songs.length && S.songs[0].pca ? [{ x: "pca_0", y: "pca_1", big: true }] : []), ...(S.pair ? [{ x: S.pair[0], y: S.pair[1], proposed: true }] : []), ...PAIRS.map(([a, b]) => ({ x: `${a}_${S.view.mapset}`, y: `${b}_${S.view.mapset}` })).filter((d) => has(d.x) && has(d.y))];
+const mapDefs = () => [...(S.songs.length && S.songs[0].pca ? [{ x: "pca_0", y: "pca_1", big: true }] : []), ...(S.pair ? [{ x: S.pair[0], y: S.pair[1], proposed: true }] : []), ...PAIRS.filter(([a, b]) => has(`${a}_${S.view.mapset}`) && has(`${b}_${S.view.mapset}`)).map(([a, b]) => ({ x: `${a}_${S.view.mapset}`, y: `${b}_${S.view.mapset}` })).filter((d) => has(d.x) && has(d.y))];
 const base = (axis) => axis.replace(/_(mean|std|median|min|max)$/, "");
 const statOf = (axis) => (axis.match(/_(mean|std)$/) || [])[1];
 const valueOf = (s, a) => a.startsWith("pca_") ? (s.pca ? s.pca[+a.slice(4)] : NaN) : s.x[a];
@@ -544,52 +552,122 @@ function renderModel() {
   for (const bx of [wbox, lbox]) bx.querySelectorAll("[data-walk]").forEach((b) => b.onclick = (e) => { e.preventDefault(); walkList(LISTS[b.dataset.walk], clsOfList[b.dataset.walk], b.dataset.walk); });
   wbox.querySelectorAll("[data-wb]").forEach((b) => b.onclick = () => walkBoundary(b.dataset.wb));
 }
-let knobs = null, tknobs = {};
-function buildKnobs() {
+let knobs = null;
+function buildKnobs() {                                            // LENS: one gain knob per descriptor family (interaction, not processing)
   const box = $("#knobs"); if (!box || knobs) return; knobs = {};
   box.innerHTML = "";
   const add = (key, o) => { const el = document.createElement("div"); box.appendChild(el); knobs[key] = Object.assign(knob(el, o), { el }); };
   for (const [f] of FAMILIES) add(f, { label: () => t(f), value: S.model.gains[f], min: 0, max: 2, def: 1, fmt: (v) => v === 0 ? t("off") : "×" + v.toFixed(2),
     onInput: (v) => { S.model.gains[f] = v; runModel("knob"); } });
-  const tbox = $("#trainknobs"); tbox.innerHTML = ""; tknobs = {};
-  const tadd = (key, o) => { const el = document.createElement("div"); tbox.appendChild(el); tknobs[key] = knob(el, o); };
-  tadd("thr", { label: () => t("threshold"), value: S.model.thr, min: 0.05, max: 0.95, def: 0.5, fmt: (v) => v.toFixed(2), onInput: (v) => { S.model.thr = v; fieldCache.clear(); runModel("threshold"); } });
-  tadd("C", { label: () => t("regularisation"), value: S.model.C, min: 0.01, max: 100, def: 1, log: true, fmt: (v) => "C " + (v < 1 ? v.toFixed(2) : v.toFixed(1)), onInput: (v) => { S.model.C = v; runModel("reg"); } });
-  // k for k-means (default: the number of classes, Miguel 10-27); a whole number, applied when the knob is let go
-  const kDef = () => (S.analysis ? S.analysis.classes.length : Math.max(2, S.classes.filter((c) => c.on && c.name).length));
-  tadd("k", { label: () => t("k_knob"), value: S.k || kDef(), min: 2, max: 12, def: kDef(), fmt: (v) => String(Math.round(v)),
-    onChange: (v) => { const k = Math.round(v); tknobs.k.set(k); if (k === (S.analysis ? S.analysis.k : null)) return; S.k = k === kDef() ? null : k; S.recompute(); } });
-  // DBSCAN's eps (default: the k-distance heuristic on the scaled table) and min samples; applied when let go
-  tadd("eps", { label: () => t("eps_knob"), value: S.cluster.eps || 1, min: 0.05, max: 5, def: 1, log: true, fmt: (v) => v.toFixed(2),
-    onChange: (v) => { S.cluster.eps = v; S.recompute(); } });
-  tadd("ms", { label: () => t("ms_knob"), value: S.cluster.minSamples, min: 2, max: 20, def: 5, fmt: (v) => String(Math.round(v)),
-    onChange: (v) => { const m = Math.round(v); tknobs.ms.set(m); if (m === S.cluster.minSamples) return; S.cluster.minSamples = m; S.cluster.eps = null; S.recompute(); } });
 }
-// setup ②: each transformation and clustering on / off (as Dark Sonification's transformations), and which clustering the maps show
+// a setup row (Miguel 10-28): left, the name and a one-line note; right, on the same line, the row's knobs and then its
+// on / off button (or a fixed value). Knobs show only while the row is on. Same knob component as LENS.
+function srow(box, { name, note = "", on = null, toggle = null, knobs: ks = [], fixed = null, extra = "", id = "" }) {
+  const r = document.createElement("div"); r.className = "srow" + (on === false ? " off" : "");
+  r.innerHTML = `<div class="sl"><b>${name}</b>${note ? `<span class="k small">${note}</span>` : ""}</div><div class="sr"></div>`;
+  const right = r.querySelector(".sr"), made = {};
+  for (const k of ks) { const el = document.createElement("div"); right.appendChild(el); made[k.key] = k.self = knob(el, k); el.hidden = on === false || !!k.hide; }
+  if (on !== null) { const b = document.createElement("button"); b.className = "btn sm tog" + (on ? " on" : ""); b.textContent = t(on ? "x_on" : "x_off");
+    b.disabled = S.running; b.onclick = toggle; if (id) b.dataset.p = id; right.appendChild(b); }
+  else if (fixed !== null) right.insertAdjacentHTML("beforeend", `<span class="fixedv">${fixed}</span>`);
+  if (extra) r.insertAdjacentHTML("beforeend", extra);
+  box.appendChild(r); return { row: r, knobs: made };
+}
+// a knob over a list of allowed values (sample rates, FFT sizes, hops); applied when let go, then the rows are redrawn
+const stepKnob = (key, label, list, get, set, fmt, def) => ({ key, label, value: Math.max(0, list.indexOf(get())), min: 0, max: list.length - 1, def: Math.max(0, list.indexOf(def)),
+  fmt: (v) => fmt(list[Math.round(v)]), onChange: (v) => { set(list[Math.round(v)]); renderFeatures(); } });
+// ① the preset: DarkLibrosa's sound_normalize + extract settings, each family on / off (defaults = her preset, ANA_PRESET)
+const SR_LIST = [22050, 32000, 44100, 48000], NFFT_LIST = [1024, 2048, 4096, 8192], HOP_LIST = [128, 256, 512, 1024];
+const presetDiff = (P = S.preset) => {
+  const A = ANA_PRESET, d = [];
+  if (P.sr !== A.sr) d.push(`sr ${P.sr / 1000} kHz`); if (P.normalize !== A.normalize) d.push(P.normalize === "peak" ? "peak" : "no peak normalisation");
+  if (P.clip !== A.clip) d.push(P.clip ? "clip" : "no clipping"); if (P.nFft !== A.nFft) d.push(`n_fft ${P.nFft}`); if (P.hop !== A.hop) d.push(`hop ${P.hop}`);
+  if (P.rolloff_percent !== A.rolloff_percent) d.push(`rolloff ${P.rolloff_percent.toFixed(2)}`); if (P.contrast_bands !== A.contrast_bands) d.push(`contrast ${P.contrast_bands} bands`);
+  for (const [f, v] of Object.entries(P.families)) if (v !== A.families[f]) d.push(`${f} ${v ? "on" : "off"}`);
+  return d;
+};
+function presetChanged() {                                         // the "default preset · changed" mark and the reset button
+  const d = presetDiff(), h = $("#presethead"); if (!h) return;
+  h.innerHTML = `<b>${t("preset_ana")}</b>${d.length ? ` · <span class="changed">${t("preset_changed")}</span> <button class="btn sm" id="presetreset">${t("preset_reset")}</button>` : ""}`;
+  const rb = $("#presetreset"); if (rb) rb.onclick = () => { S.preset = structuredClone(PRESET0); renderFeatures(); };
+  const n = columnsOf(S.preset).length; $("#presetcols").textContent = t("preset_cols", { n }) + (S.analysis && !S.source ? " " + t("x_reanalyse") : "");
+}
+const maxBands = () => Math.max(1, Math.floor(Math.log2(S.preset.sr / 2 / 200)));
+function renderFeatures() {
+  const box = $("#features"), P = S.preset, F = P.families; box.innerHTML = `<div id="presethead"></div>`;
+  const fam = (k, name, note, ks = []) => srow(box, { id: "f:" + k, name, note, on: F[k], toggle: () => { F[k] = !F[k]; renderFeatures(); }, knobs: ks });
+  const sk = (o) => stepKnob(...o);
+  // signal
+  srow(box, { name: t("f_sr"), note: t("f_sr_how"), knobs: [sk(["sr", "kHz", SR_LIST, () => P.sr, (v) => { P.sr = v; P.contrast_bands = Math.min(P.contrast_bands, maxBands()); }, (v) => (v / 1000).toFixed(v % 1000 ? 2 : 0), 44100])] });
+  srow(box, { name: t("f_mono"), note: t("f_mono_how"), fixed: t("x_on") + " · " + t("fixed") });
+  srow(box, { name: t("f_peak"), note: t("f_peak_how"), on: P.normalize === "peak", toggle: () => { P.normalize = P.normalize === "peak" ? "none" : "peak"; renderFeatures(); } });
+  srow(box, { name: t("f_clip"), note: t("f_clip_how"), on: !!P.clip, toggle: () => { P.clip = !P.clip; renderFeatures(); } });
+  srow(box, { name: "STFT", note: t("f_stft_how"), knobs: [sk(["nfft", "n_fft", NFFT_LIST, () => P.nFft, (v) => { P.nFft = v; if (P.hop > v / 2) P.hop = v / 2; }, String, 2048]),
+    sk(["hop", "hop", HOP_LIST, () => P.hop, (v) => { P.hop = Math.min(v, P.nFft / 2); }, String, 512])] });
+  srow(box, { name: t("f_seg"), note: t("f_seg_how"), fixed: `10 s · ${t("fixed")}` });
+  // the descriptor families
+  fam("zcr", t("f_zcr"), t("f_zcr_how"));
+  fam("rms", t("f_rms"), t("f_rms_how"));
+  fam("spectral", t("f_spectral"), t("f_spectral_how"), [{ key: "roll", label: "rolloff", value: P.rolloff_percent, min: 0.5, max: 0.99, def: 0.85, fmt: (v) => v.toFixed(2),
+    onChange: (v) => { P.rolloff_percent = Math.round(v * 100) / 100; presetChanged(); } }]);
+  fam("contrast", t("f_contrast"), t("f_contrast_how"), [{ key: "nb", label: "bands", value: P.contrast_bands, min: 1, max: maxBands(), def: 1, fmt: (v) => String(Math.round(v)),
+    onChange: (v) => { P.contrast_bands = Math.round(v); renderFeatures(); } }]);
+  fam("flux", t("f_flux"), t("f_flux_how"));
+  fam("mfcc", t("f_mfcc0"), t("f_mfcc0_how"));
+  fam("chroma", t("f_chroma"), t("f_chroma_how"));
+  fam("rhythm", t("f_rhythm"), t("f_rhythm_how"));
+  box.insertAdjacentHTML("beforeend", `<div class="k small" id="presetcols"></div>`);
+  presetChanged(); renderExtras();
+}
+// the extras, the same rows: all MFCCs (n_mfcc), chroma per pitch class, CLAP (the model under it while on)
+function renderExtras() {
+  const box = $("#extras"), X = S.extras; box.innerHTML = `<div class="k small sub">${t("x_head")}</div>`;
+  const tog = (k) => () => { X[k].on = !X[k].on; renderExtras(); };
+  const m = srow(box, { name: t("x_mfcc"), note: t("x_mfcc_how"), on: X.mfcc.on, toggle: tog("mfcc"),
+    knobs: [{ key: "n", label: "n_mfcc", value: X.mfcc.n, min: 2, max: 40, def: 13, fmt: (v) => String(Math.round(v)), onChange: (v) => { X.mfcc.n = Math.round(v); m.knobs.n.set(X.mfcc.n); } }] });
+  srow(box, { name: t("x_chroma12"), note: t("x_chroma12_how"), on: X.chroma12.on, toggle: tog("chroma12") });
+  srow(box, { name: "CLAP", note: t("x_clap_how") + (self.crossOriginIsolated ? "" : " " + t("x_clap_slow")), on: X.clap.on, toggle: tog("clap"),
+    extra: X.clap.on ? `<div class="seg wide xm">${Object.entries(CLAP_MODELS).map(([k, mm]) => `<button class="btn sm ${X.clap.model === k ? "on" : ""}" data-cm2="${k}">${mm.id.split("/")[1]}</button>`).join("")}</div>` : "" });
+  box.querySelectorAll("[data-cm2]").forEach((b) => b.onclick = () => { X.clap.model = b.dataset.cm2; renderExtras(); });
+}
+// ② training: each transformation and clustering on / off with its own knobs on its line, which clustering the maps show,
+// and the model (logistic regression) with its threshold and regularisation
+const kDef = () => (S.analysis ? S.analysis.classes.length : Math.max(2, S.classes.filter((c) => c.on && c.name).length));
 function renderPipe() {
-  const box = $("#pipe"); if (!box) return;
-  const row = (g, k, name, note) => { const on = (g === "t" ? S.pipe : S.clu)[k];
-    return `<div class="xrow"><div class="xh"><b>${name}</b><button class="btn sm ${on ? "on" : ""}" data-p="${g}:${k}" ${S.running ? "disabled" : ""}>${t(on ? "x_on" : "x_off")}</button></div>${note ? `<span class="k small">${note}</span>` : ""}</div>`; };
-  const on = Object.keys(CLU).filter((m) => S.clu[m]);
-  box.innerHTML = `<div class="k small">${t("p_transforms")}</div>
-    ${row("t", "minmax", "MinMax", t("p_minmax"))}${row("t", "pca", "PCA 3", t("p_pca"))}${row("t", "density", t("p_density_h"), t("p_density"))}
-    <div class="k small" style="margin-top:8px">${t("cl_method")}</div>
-    ${Object.keys(CLU).map((m) => row("c", m, CLU[m], t("p_" + m))).join("")}
-    ${on.length > 1 ? `<div class="k small" style="margin-top:6px">${t("p_show")}</div><div class="seg wide xm">${on.map((m) => `<button class="btn sm ${(S.analysis ? S.analysis.shown : S.cluster.show) === m ? "on" : ""}" data-show="${m}">${CLU[m]}</button>`).join("")}</div>` : ""}`;
-  box.querySelectorAll("[data-p]").forEach((b) => b.onclick = () => { const [g, k] = b.dataset.p.split(":"), o = g === "t" ? S.pipe : S.clu; o[k] = !o[k];
-    if (g === "c" && o[k] && !on.length) S.cluster.show = k; if (k === "dbscan") S.cluster.eps = null;
-    renderKnobs(); S.recompute(); });
-  box.querySelectorAll("[data-show]").forEach((b) => b.onclick = () => { S.cluster.show = b.dataset.show; if (S.analysis) { realign(); renderAll(); } else renderKnobs(); });
+  const box = $("#pipe"); if (!box) return; box.innerHTML = "";
+  const K = S.analysis ? S.analysis.classes.length : 2, on = Object.keys(CLU).filter((m) => S.clu[m]);
+  const toggle = (o, k) => () => { o[k] = !o[k]; if (o === S.clu && o[k] && !on.length) S.cluster.show = k; if (k === "dbscan") S.cluster.eps = null; renderPipe(); S.recompute(); };
+  const whole = (v) => String(Math.round(v));
+  box.insertAdjacentHTML("beforeend", `<div class="k small sub">${t("p_transforms")}</div>`);
+  srow(box, { id: "t:minmax", name: "MinMax", note: t("p_minmax"), on: S.pipe.minmax, toggle: toggle(S.pipe, "minmax") });
+  srow(box, { id: "t:pca", name: "PCA 3", note: t("p_pca"), on: S.pipe.pca, toggle: toggle(S.pipe, "pca") });
+  srow(box, { id: "t:density", name: t("p_density_h"), note: t("p_density"), on: S.pipe.density, toggle: toggle(S.pipe, "density") });
+  box.insertAdjacentHTML("beforeend", `<div class="k small sub">${t("cl_method")}</div>`);
+  const kKnob = (m) => ({ key: "k", label: "k", value: (m === "kmeans" ? S.k : S.kOf[m]) || kDef(), min: 2, max: 12, def: kDef(), fmt: whole,
+    onChange: (v) => { const k = Math.round(v), val = k === kDef() ? null : k; rows[m].knobs.k.set(k);
+      if (m === "kmeans") { if (val === S.k) return; S.k = val; S.recompute(); } else { if (val === S.kOf[m]) return; S.kOf[m] = val; runOthers(); renderAll(); } } });
+  const rows = {};
+  rows.kmeans = srow(box, { id: "c:kmeans", name: "k-means", note: t("p_kmeans"), on: S.clu.kmeans, toggle: toggle(S.clu, "kmeans"), knobs: [kKnob("kmeans")] });
+  rows.dbscan = srow(box, { id: "c:dbscan", name: "DBSCAN", note: t("p_dbscan"), on: S.clu.dbscan, toggle: toggle(S.clu, "dbscan"), knobs: [
+    { key: "eps", label: "eps", value: S.cluster.eps || (S.analysis && S.analysis.eps) || 1, min: 0.05, max: 5, def: 1, log: true, fmt: (v) => v.toFixed(2), onChange: (v) => { S.cluster.eps = v; S.recompute(); } },
+    { key: "ms", label: t("ms_knob"), value: S.cluster.minSamples, min: 2, max: 20, def: 5, fmt: whole,
+      onChange: (v) => { const m = Math.round(v); rows.dbscan.knobs.ms.set(m); if (m === S.cluster.minSamples) return; S.cluster.minSamples = m; S.cluster.eps = null; S.recompute(); } }] });
+  for (const m of ["agglomerative", "gmm", "spectral"]) rows[m] = srow(box, { id: "c:" + m, name: CLU[m], note: t("p_" + m), on: S.clu[m], toggle: toggle(S.clu, m), knobs: [kKnob(m)] });
+  rows.hdbscan = srow(box, { id: "c:hdbscan", name: "HDBSCAN", note: t("p_hdbscan"), on: S.clu.hdbscan, toggle: toggle(S.clu, "hdbscan"), knobs: [
+    { key: "mcs", label: t("mcs_knob"), value: S.cluster.mcs, min: 2, max: 50, def: 10, fmt: whole,
+      onChange: (v) => { const m = Math.round(v); rows.hdbscan.knobs.mcs.set(m); if (m === S.cluster.mcs) return; S.cluster.mcs = m; runOthers(); renderAll(); } }] });
+  if (on.length > 1) box.insertAdjacentHTML("beforeend", `<div class="k small sub">${t("p_show")}</div><div class="seg wide xm">${on.map((m) => `<button class="btn sm ${(S.analysis ? S.analysis.shown : S.cluster.show) === m ? "on" : ""}" data-show="${m}">${CLU[m]}</button>`).join("")}</div>`);
+  box.querySelectorAll("[data-show]").forEach((b) => b.onclick = () => { S.cluster.show = b.dataset.show; if (S.analysis) { realign(); renderAll(); } else renderPipe(); });
+  box.insertAdjacentHTML("beforeend", `<div class="k small sub">${t("p_model_h")}</div>`);
+  srow(box, { name: t("p_model"), note: t("p_model_how"), knobs: [
+    { key: "thr", label: t("threshold"), value: S.model.thr, min: 0.05, max: 0.95, def: 0.5, fmt: (v) => v.toFixed(2), hide: K !== 2, onInput: (v) => { S.model.thr = v; fieldCache.clear(); runModel("threshold"); } },
+    { key: "C", label: t("regularisation"), value: S.model.C, min: 0.01, max: 100, def: 1, log: true, fmt: (v) => "C " + (v < 1 ? v.toFixed(2) : v.toFixed(1)), onInput: (v) => { S.model.C = v; runModel("reg"); } }] });
 }
 function renderKnobs() {
   buildKnobs(); if (!knobs) return;
-  const K = S.analysis ? S.analysis.classes.length : 2;
-  if (tknobs.thr) { const ch = $("#trainknobs").children, db = S.clu.dbscan; ch[0].hidden = K !== 2; ch[2].hidden = !S.clu.kmeans; ch[3].hidden = !db; ch[4].hidden = !db;
-    if (db && S.analysis && S.analysis.eps) tknobs.eps.set(S.analysis.eps); }
-  renderPipe();
-  const present = new Set(MCOLS().map(famOf));                    // the extras' knobs only when their columns are there
-  for (const k in knobs) { knobs[k].el && (knobs[k].el.hidden = ["mfcc", "croma12", "clap"].includes(k) && !present.has(k)); knobs[k].repaint(); }
-  for (const k in tknobs) tknobs[k].repaint();
+  if (!document.querySelector("#pipe .srow .knob:focus")) renderPipe();   // not while a knob there is being turned
+  const present = new Set(MCOLS().map(famOf));                    // a family's gain knob only when its columns are there
+  for (const k in knobs) { knobs[k].el && (knobs[k].el.hidden = !present.has(k)); knobs[k].repaint(); }
 }
 function renderLegend() {
   const L = $("#leg");
@@ -630,27 +708,12 @@ function renderChip() {
   else if (S.files.length) { st = "ready"; msg = t("chip_files"); }
   c.className = st; tx.textContent = msg;
 }
-// the extras, in the style of DarkLibrosa's preprocessing config: each family on / off, its parameters as knobs
-let xknob = null;
-function renderExtras() {
-  const box = $("#extras"), X = S.extras, on = (b) => `<button class="btn sm ${b ? "on" : ""}">${t(b ? "x_on" : "x_off")}</button>`;
-  box.innerHTML = `<div class="xrow" data-x="mfcc"><div class="xh"><b>${t("x_mfcc")}</b>${on(X.mfcc.on)}</div><span class="k small">${t("x_mfcc_how")}</span><div class="xk"></div></div>
-    <div class="xrow" data-x="chroma12"><div class="xh"><b>${t("x_chroma12")}</b>${on(X.chroma12.on)}</div><span class="k small">${t("x_chroma12_how")}</span></div>
-    <div class="xrow" data-x="clap"><div class="xh"><b>CLAP</b>${on(X.clap.on)}</div><span class="k small">${t("x_clap_how")}${self.crossOriginIsolated ? "" : " " + t("x_clap_slow")}</span>
-      <div class="seg wide xm" ${X.clap.on ? "" : "hidden"}>${Object.entries(CLAP_MODELS).map(([k, m]) => `<button class="btn sm ${X.clap.model === k ? "on" : ""}" data-cm2="${k}">${m.id.split("/")[1]}</button>`).join("")}</div></div>
-    ${S.analysis && !S.source ? `<p class="k small">${t("x_reanalyse")}</p>` : ""}`;
-  box.querySelectorAll(".xrow").forEach((r) => { const k = r.dataset.x; r.querySelector(".xh button").onclick = () => { X[k].on = !X[k].on; renderExtras(); }; });
-  box.querySelectorAll("[data-cm2]").forEach((b) => b.onclick = () => { X.clap.model = b.dataset.cm2; renderExtras(); });
-  const kb = box.querySelector(".xk"); kb.hidden = !X.mfcc.on;
-  xknob = knob(kb, { label: () => "n_mfcc", value: X.mfcc.n, min: 2, max: 40, def: 13, fmt: (v) => String(Math.round(v)), onChange: (v) => { X.mfcc.n = Math.round(v); xknob.set(X.mfcc.n); } });
-}
-function renderSetup() {                                          // ② the default preset, and ③'s processing line (left panel, SETUP)
-  const A = S.analysis, P = ANA_PRESET;
-  renderExtras();
-  $("#features").innerHTML = `${t("preset_ana")}<div class="k">${P.sr / 1000} kHz mono · peak · n_fft ${P.nFft} · hop ${P.hop} · ${P.window_s} s (${t("fixed")}) · contrast ${P.contrast_bands} band (2 rows) · mfcc ${P.n_mfcc} · chroma stft (mean of 12) · rhythm per song (tempo, onsets)</div>`;
+function renderSetup() {                                          // ① the preset and the extras, ② the training rows (left panel, SETUP)
+  const A = S.analysis;
+  if (!document.querySelector("#features .knob:focus, #extras .knob:focus")) renderFeatures(); else presetChanged();
   const steps = [S.pipe.minmax && "MinMax", S.pipe.pca && "PCA 3", S.pipe.density && "density KDE 0.2",
     ...Object.keys(CLU).filter((m) => S.clu[m]).map((m) => m === "kmeans" ? `k-means (n_init 10, seed 42), k ${A ? A.k : "= " + t("classes")}` : m === "dbscan" ? `DBSCAN (eps ${A && A.eps ? (+A.eps).toFixed(2) : "k-dist"}, min ${S.cluster.minSamples})` : CLU[m])].filter(Boolean);
-  $("#processing").innerHTML = `<div class="k">${steps.join(" · ") || "—"}${A && A.shown ? ` · align ${A.method}` : ""}</div><div class="k">${t("model_desc")}</div>`;
+  $("#processing").innerHTML = `<div class="k">${steps.join(" · ") || "—"}${A && A.shown ? ` · align ${A.method}` : ""} · ${t("p_model")}</div>`;
   const src = $("#source");
   src.innerHTML = A && A.source ? `<h4>${t("st_source")}</h4><div class="small">${A.source.kinds.map(esc).join("<br>")}</div>${A.stored ? `<div class="row"><span class="k small">${t("st_stored")}</span><button class="btn sm" id="restore">${t("st_recompute")}</button></div>` : !S.useStored ? `<div class="row"><button class="btn sm" id="restore">${t("st_usestored")}</button></div>` : ""}` : "";
   const rs = $("#restore"); if (rs) rs.onclick = () => { S.useStored = !S.useStored; S.recompute(); };
@@ -869,7 +932,7 @@ function sessionData() {
   return { format: SESSION, version: 1, saved: new Date().toISOString(), preset: ANA_PRESET, columns: FEATS, extras: S.extras, clapInfo: S.clapInfo || null, classes: S.analysis.classes,
     songs: S.songs.map((s) => ({ id: s.id, name: s.name, rel: s.rel, size: s.size, cls: s.cls, duration: s.duration, sr_native: s.sr_native, peak: s.peak, l0: s.l0, l1: s.l1, stored: s.stored, timestamp: s.timestamp })),
     source: S.source, useStored: S.useStored,
-    overrides: S.overrides, model: { gains: S.model.gains, C: S.model.C, thr: S.model.thr }, k: S.k, pipe: S.pipe, clu: S.clu, cluster: S.cluster,
+    overrides: S.overrides, model: { gains: S.model.gains, C: S.model.C, thr: S.model.thr }, k: S.k, kOf: S.kOf, pipe: S.pipe, clu: S.clu, cluster: S.cluster, presetUsed: S.usedPreset || null,
     view: { mapset: S.view.mapset, colour: S.view.colour, boundary: S.view.boundary, work: S.view.work, cmpLevel: S.view.cmpLevel,
             focus: S.view.focus, pairMode: S.view.pairMode, pairSlice: S.view.pairSlice, pairLevel: S.view.pairLevel },
     sel: [...S.sel], trace: S.trace, pair: S.pair };
@@ -883,9 +946,10 @@ async function openSession(file) {
   S.classes = ses.classes.map((c) => ({ name: c, root: "", on: true })); S.files = [];
   FEATS = Array.isArray(ses.columns) && ses.columns.length ? ses.columns : COLUMNS; if (Array.isArray(ses.xcolumns)) FEATS = [...FEATS, ...ses.xcolumns];
   if (ses.extras) S.extras = Object.assign(S.extras, ses.extras); S.clapInfo = ses.clapInfo || null; S.source = ses.source || null; S.useStored = ses.useStored ?? true;
-  S.songs = ses.songs.map((s) => ({ ...s, file: null })); S.overrides = ses.overrides || []; S.k = ses.k || null; if (ses.pipe) Object.assign(S.pipe, ses.pipe); if (ses.clu) Object.assign(S.clu, ses.clu); if (ses.cluster) Object.assign(S.cluster, ses.cluster);
+  S.songs = ses.songs.map((s) => ({ ...s, file: null })); S.overrides = ses.overrides || []; S.k = ses.k || null; if (ses.pipe) Object.assign(S.pipe, ses.pipe); if (ses.clu) Object.assign(S.clu, ses.clu); if (ses.cluster) Object.assign(S.cluster, ses.cluster); if (ses.kOf) Object.assign(S.kOf, ses.kOf);
+  if (ses.presetUsed) { S.usedPreset = ses.presetUsed; S.preset = structuredClone(ses.presetUsed); }
   Object.assign(S.model, ses.model || {}); Object.assign(S.view, ses.view || {});
-  if (knobs) { for (const [f] of FAMILIES) knobs[f] && knobs[f].set(S.model.gains[f] ?? 1); tknobs.thr && tknobs.thr.set(S.model.thr); tknobs.C && tknobs.C.set(S.model.C); tknobs.k && tknobs.k.set(S.k || S.analysis?.k || 2); }
+  if (knobs) for (const [f] of FAMILIES) knobs[f] && knobs[f].set(S.model.gains[f] ?? 1);
   S.clusterings = null; process();
   S.sel = new Set(ses.sel || []); S.trace = ses.trace || []; S.pair = ses.pair || null;
   $("#status").textContent = t("o_opened", { n: S.songs.length, name: file.name }); renderAll(); renderLinkNote();
@@ -931,7 +995,7 @@ function methods(lang) {
     C: S.model.C, thr: S.model.thr, families: FAMILIES.filter(([f]) => new Set(MCOLS().map(famOf)).has(f)).map(([f]) => [f, S.model.gains[f] ?? 1]), famName: (f) => t(f, {}, lang),
     extras: { mfcc: FEATS.filter((c) => /^mfcc_(?!0_)\d+_mean$/.test(c)).length, chroma12: FEATS.some((c) => /^chroma_\d+_/.test(c)), clap: FEATS.some((c) => c.startsWith("clap_")) ? S.clapInfo : null }, nPreset: COLUMNS.length,
     acc: r ? r.acc : NaN, cv: r ? r.cv : NaN, folds: r ? r.folds : 5, kmModel: r ? S.songs.filter((s) => s.km === s.pred).length / S.songs.length : NaN,
-    source: A.source, stored: A.stored, pipe: A.pipe, shown: A.shown, eps: A.eps, ms: A.minSamples,
+    presetDiff: A.source ? [] : presetDiff(S.usedPreset || PRESET0), source: A.source, stored: A.stored, pipe: A.pipe, shown: A.shown, eps: A.eps, ms: A.minSamples,
     clus: A.cluTable.map((c) => ({ ...c, name: CLU[c.m] })), dbscan: A.shown === "dbscan" ? { eps: A.eps, ms: A.minSamples, clusters: A.clusters, noise: A.noise } : null,
     date: new Date().toISOString().slice(0, 10) }, lang);
 }
