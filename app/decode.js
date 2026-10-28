@@ -76,7 +76,8 @@ async function decodeNative(buf) {
 // The same result as decodeNative + a channel mix, without the copies: the 16-bit FLAC remap and the mix happen in one pass
 // over the decoder's own channel arrays, and the file's bytes go to the decoder without a copy. (A one-hour stereo file holds
 // 1.2 GB of decoded audio; with the copies the page needed ~3 GB at once and could crash.)
-export async function decodeMono(buf) {
+// with {side: true} also s = (L − R) / 2 of the first two channels (float32; zeros for a mono file), for mid / side
+export async function decodeMono(buf, { side = false } = {}) {
   const pcm = decodePcm(buf);
   let chs, sr, remap = false;
   if (pcm) { chs = Array.from({ length: pcm.numberOfChannels }, (_, c) => pcm.getChannelData(c)); sr = pcm.sampleRate; }
@@ -88,12 +89,14 @@ export async function decodeMono(buf) {
     // Chromium scales 16-bit FLAC by 1/32767 above zero (1/32768 below): back to k / 32768 (libsndfile), as decodeNative does
     if (flacBits === 16) remap = chs.some((x) => { for (let i = 0; i < x.length; i += 97) if (x[i] > 0 && x[i] * 32768 !== Math.round(x[i] * 32768)) return true; return false; });
   }
-  const n = chs[0].length, nc = chs.length, y = new Float32Array(n);
+  const n = chs[0].length, nc = chs.length, y = new Float32Array(n), s = side ? new Float32Array(n) : null;
+  const val = remap ? (v) => Math.round(v * (v > 0 ? 32767 : 32768)) / 32768 : (v) => v;
+  if (s && nc > 1) { const a = chs[0], b = chs[1], f = Math.fround; for (let k = 0; k < n; k++) s[k] = f(f(f(val(a[k])) - f(val(b[k]))) / 2); }
   for (let c = 0; c < nc; c++) { const ch = chs[c];
     if (remap) for (let k = 0; k < n; k++) { const v = ch[k]; y[k] += Math.round(v * (v > 0 ? 32767 : 32768)) / 32768; }
     else for (let k = 0; k < n; k++) y[k] += ch[k]; }
   if (nc > 1) for (let k = 0; k < n; k++) y[k] /= nc;
-  return { y, sr };
+  return s ? { y, sr, s } : { y, sr };
 }
 export { nativeRate, decodePcm, decodeNative };
 

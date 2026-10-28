@@ -79,7 +79,9 @@ export function flacHeader(input) {
   const s = o + 8; return { sampleRate: (b[s + 10] << 12) | (b[s + 11] << 4) | (b[s + 12] >> 4), channels: ((b[s + 12] >> 1) & 7) + 1, bits: (((b[s + 12] & 1) << 4) | (b[s + 13] >> 4)) + 1,
     total: (b[s + 13] & 0x0f) * 2 ** 32 + ((b[s + 14] << 24) >>> 0) + (b[s + 15] << 16) + (b[s + 16] << 8) + b[s + 17] };
 }
-export function decodeFlac(input, { mono = false } = {}) {
+// with side (and mono): also s, the side signal (L − R) / 2 of the first two channels in float32 (zeros for a mono file),
+//   for the page's mid / side analysis (Miguel 2026-10-28); y stays exactly the mono mix.
+export function decodeFlac(input, { mono = false, side = false } = {}) {
   const b = input instanceof Uint8Array ? input : new Uint8Array(input);
   let o = 0;
   if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) o = 10 + ((b[6] & 0x7f) << 21 | (b[7] & 0x7f) << 14 | (b[8] & 0x7f) << 7 | (b[9] & 0x7f)) + (b[5] & 0x10 ? 10 : 0);   // ID3v2
@@ -93,7 +95,7 @@ export function decodeFlac(input, { mono = false } = {}) {
     o += 4 + len; if (last) break;
   }
   const cap = total || 1 << 20, sc = 2 ** (bps - 1);
-  let data = mono ? null : Array.from({ length: ch }, () => new Int32Array(cap)), y = mono ? new Float32Array(cap) : null;
+  let data = mono ? null : Array.from({ length: ch }, () => new Int32Array(cap)), y = mono ? new Float32Array(cap) : null, sd = mono && side ? new Float32Array(cap) : null;
   const fr = Math.fround;
   let n = 0, maxBs = 65536, sub = Array.from({ length: 8 }, () => new Float64Array(maxBs));
   const br = new Bits(b, o);
@@ -120,8 +122,9 @@ export function decodeFlac(input, { mono = false } = {}) {
     else if (ca === 9) for (let i = 0; i < bs; i++) { const r = s1[i]; s1[i] = r; a[i] = a[i] + r; }
     else if (ca === 10) for (let i = 0; i < bs; i++) { const m = a[i] * 2 + (s1[i] & 1), sd = s1[i]; a[i] = (m + sd) >> 1; s1[i] = (m - sd) >> 1; }
     if (mono) {
-      if (n + bs > y.length) { const g = new Float32Array(Math.max(n + bs, y.length * 2)); g.set(y); y = g; }
+      if (n + bs > y.length) { const g = new Float32Array(Math.max(n + bs, y.length * 2)); g.set(y); y = g; if (sd) { const h = new Float32Array(g.length); h.set(sd); sd = h; } }
       for (let i = 0; i < bs; i++) { let acc = fr(sub[0][i] / sc); for (let c = 1; c < nch; c++) acc = fr(acc + fr(sub[c][i] / sc)); y[n + i] = nch > 1 ? fr(acc / nch) : acc; }
+      if (sd && nch > 1) for (let i = 0; i < bs; i++) sd[n + i] = fr(fr(fr(sub[0][i] / sc) - fr(sub[1][i] / sc)) / 2);
       n += bs; if (total && n >= total) break; if (br.byte === start) break; continue;
     }
     if (n + bs > data[0].length) for (let c = 0; c < ch; c++) { const g = new Int32Array(Math.max(n + bs, data[c].length * 2)); g.set(data[c]); data[c] = g; }
@@ -131,7 +134,7 @@ export function decodeFlac(input, { mono = false } = {}) {
     if (br.byte === start) break;
   }
   const len = total ? Math.min(n, total) : n;
-  if (mono) return { sampleRate: sr, channels: ch, bits: bps, length: len, y: y.subarray(0, len) };
+  if (mono) return { sampleRate: sr, channels: ch, bits: bps, length: len, y: y.subarray(0, len), ...(sd ? { s: sd.subarray(0, len) } : {}) };
   return { sampleRate: sr, channels: ch, bits: bps, length: len, data: data.map((d) => d.subarray(0, len)) };
 }
 export function toMonoFloat(dec) {

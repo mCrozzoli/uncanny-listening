@@ -44,6 +44,10 @@ DBSCAN as scikit-learn's (M. Ester, H.-P. Kriegel, J. Sander, X. Xu, "A density-
   plot); clusters mapped to their majority class.
 The extra MFCCs (DCT-II, orthonormal, of the mel dB spectrum; S. B. Davis, P. Mermelstein, IEEE Trans. ASSP 28, 1980) and
   chroma per pitch class, as librosa computes them; tested against librosa (max relative difference ~1e-6).
+Stereo (the channels row, opt-in; mono is the default preset): mid / side after A. D. Blumlein's stereo patent (GB 394,325,
+  1931; mid = (L + R) / 2, side = (L − R) / 2); per-frame inter-channel correlation (Pearson's coefficient of L and R, as a
+  phase-correlation meter), width (side / mid rms) and L / R energy balance. The side features use the same DarkLibrosa
+  port as the mono ones, tested against DarkLibrosa on the side signal.
 Statistics in the page: Cohen's d (J. Cohen, Statistical Power Analysis for the Behavioral Sciences, 1988) and η²;
   the boundary field by Nadaraya–Watson kernel regression (E. A. Nadaraya 1964; G. S. Watson 1964).
 Resampling to the libsoxr "HQ" specification (libsoxr, LGPL-2.1; used as a specification only): a Kaiser-windowed sinc

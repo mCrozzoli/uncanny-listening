@@ -15,8 +15,8 @@ import { knob } from "./knob.js";
 import * as player from "./player.js";
 import { COLUMNS, ANA_PRESET, extraColumns, columnsOf } from "../core/darklibrosa.js";
 // the editable part of the preset (Miguel 10-28: switches and knobs; defaults = her preset, segments fixed at 10 s)
-const PRESET0 = (({ sr, nFft, hop, normalize, clip, rolloff_percent, contrast_bands, families }) =>
-  ({ sr, nFft, hop, normalize, clip, rolloff_percent, contrast_bands, families: { ...families } }))(ANA_PRESET);
+const PRESET0 = (({ sr, nFft, hop, normalize, clip, rolloff_percent, contrast_bands, families, stereo }) =>
+  ({ sr, nFft, hop, normalize, clip, rolloff_percent, contrast_bands, families: { ...families }, stereo }))(ANA_PRESET);
 import { flacHeader } from "../core/flac.js";
 import { decodeMono } from "./decode.js";
 import { pipeline, alignLabels, alignAny } from "../core/analysis.js";
@@ -46,8 +46,8 @@ const PAIRS = [["rms", "chroma"], ["rms", "spectral_flux"], ["rms", "spectral_co
 // the knobs: one per descriptor family (brief §3.4: hers + brillo, then the rest of her preset's columns grouped)
 export const FAMILIES = [["dinamica", ["rms"]], ["armonia", ["chroma"]], ["timbre", ["spectral_contrast_0", "spectral_contrast_1"]], ["complejidad", ["spectral_flux"]],
   ["brillo", ["spectral_centroid"]], ["forma", ["spectral_bandwidth", "spectral_rolloff"]], ["ruido", ["zcr", "spectral_flatness"]], ["sonoridad", ["mfcc_0"]], ["ritmo", ["tempo", "n_beats", "beat_density"]],
-  ["mfcc", []], ["croma12", []], ["clap", []]];                    // the extras' families (their knobs show when the extras are there)
-const famOf = (c) => { if (/^mfcc_(?!0_)\d+_/.test(c)) return "mfcc"; if (/^chroma_\d+_/.test(c)) return "croma12"; if (/^clap_\d+$/.test(c)) return "clap";
+  ["mfcc", []], ["croma12", []], ["clap", []], ["estereo", []]];                    // the extras' families (their knobs show when the extras are there)
+const famOf = (c) => { if (/^(side|stereo)_/.test(c)) return "estereo"; if (/^mfcc_(?!0_)\d+_/.test(c)) return "mfcc"; if (/^chroma_\d+_/.test(c)) return "croma12"; if (/^clap_\d+$/.test(c)) return "clap";
   for (const [f, bs] of FAMILIES) if (bs.some((b) => c === b || c.startsWith(b + "_"))) return f; return "otros"; };
 
 export const S = (window.UL = {
@@ -562,7 +562,7 @@ function buildKnobs() {                                            // LENS: one 
 }
 // a setup row (Miguel 10-28): left, the name and a one-line note; right, on the same line, the row's knobs and then its
 // on / off button (or a fixed value). Knobs show only while the row is on. Same knob component as LENS.
-function srow(box, { name, note = "", on = null, toggle = null, knobs: ks = [], fixed = null, extra = "", id = "" }) {
+function srow(box, { name, note = "", on = null, toggle = null, knobs: ks = [], fixed = null, extra = "", id = "", choice = null }) {
   const r = document.createElement("div"); r.className = "srow" + (on === false ? " off" : "");
   r.innerHTML = `<div class="sl"><b>${name}</b>${note ? `<span class="k small">${note}</span>` : ""}</div><div class="sr"></div>`;
   const right = r.querySelector(".sr"), made = {};
@@ -570,6 +570,9 @@ function srow(box, { name, note = "", on = null, toggle = null, knobs: ks = [], 
   if (on !== null) { const b = document.createElement("button"); b.className = "btn sm tog" + (on ? " on" : ""); b.textContent = t(on ? "x_on" : "x_off");
     b.disabled = S.running; b.onclick = toggle; if (id) b.dataset.p = id; right.appendChild(b); }
   else if (fixed !== null) right.insertAdjacentHTML("beforeend", `<span class="fixedv">${fixed}</span>`);
+  if (choice) { const g = document.createElement("span"); g.className = "seg"; right.appendChild(g);         // a few named choices
+    for (const [v, label] of choice.opts) { const b = document.createElement("button"); b.className = "btn sm" + (choice.value === v ? " on" : ""); b.textContent = label;
+      b.dataset.choice = v; b.disabled = S.running; b.onclick = () => choice.pick(v); g.appendChild(b); } }
   if (extra) r.insertAdjacentHTML("beforeend", extra);
   box.appendChild(r); return { row: r, knobs: made };
 }
@@ -580,6 +583,7 @@ const stepKnob = (key, label, list, get, set, fmt, def) => ({ key, label, value:
 const SR_LIST = [22050, 32000, 44100, 48000], NFFT_LIST = [1024, 2048, 4096, 8192], HOP_LIST = [128, 256, 512, 1024];
 const presetDiff = (P = S.preset) => {
   const A = ANA_PRESET, d = [];
+  if ((P.stereo || "mono") !== A.stereo) d.push(P.stereo === "midside" ? "channels mid / side (side features as side_* columns)" : "channels: stereo descriptors (inter-channel correlation, width, balance as stereo_* columns)");
   if (P.sr !== A.sr) d.push(`sr ${P.sr / 1000} kHz`); if (P.normalize !== A.normalize) d.push(P.normalize === "peak" ? "peak" : "no peak normalisation");
   if (P.clip !== A.clip) d.push(P.clip ? "clip" : "no clipping"); if (P.nFft !== A.nFft) d.push(`n_fft ${P.nFft}`); if (P.hop !== A.hop) d.push(`hop ${P.hop}`);
   if (P.rolloff_percent !== A.rolloff_percent) d.push(`rolloff ${P.rolloff_percent.toFixed(2)}`); if (P.contrast_bands !== A.contrast_bands) d.push(`contrast ${P.contrast_bands} bands`);
@@ -599,7 +603,8 @@ function renderFeatures() {
   const sk = (o) => stepKnob(...o);
   // signal
   srow(box, { name: t("f_sr"), note: t("f_sr_how"), knobs: [sk(["sr", "kHz", SR_LIST, () => P.sr, (v) => { P.sr = v; P.contrast_bands = Math.min(P.contrast_bands, maxBands()); }, (v) => (v / 1000).toFixed(v % 1000 ? 2 : 0), 44100])] });
-  srow(box, { name: t("f_mono"), note: t("f_mono_how"), fixed: t("x_on") + " · " + t("fixed") });
+  srow(box, { id: "f:channels", name: t("f_channels"), note: t("f_channels_how_" + (P.stereo || "mono")),
+    choice: { value: P.stereo || "mono", opts: [["mono", t("ch_mono")], ["midside", t("ch_ms")], ["descriptors", t("ch_desc")]], pick: (v) => { P.stereo = v; renderFeatures(); } } });
   srow(box, { name: t("f_peak"), note: t("f_peak_how"), on: P.normalize === "peak", toggle: () => { P.normalize = P.normalize === "peak" ? "none" : "peak"; renderFeatures(); } });
   srow(box, { name: t("f_clip"), note: t("f_clip_how"), on: !!P.clip, toggle: () => { P.clip = !P.clip; renderFeatures(); } });
   srow(box, { name: "STFT", note: t("f_stft_how"), knobs: [sk(["nfft", "n_fft", NFFT_LIST, () => P.nFft, (v) => { P.nFft = v; if (P.hop > v / 2) P.hop = v / 2; }, String, 2048]),

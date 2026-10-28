@@ -27,7 +27,13 @@ export const ANA_PRESET = {
   rolloff_percent: 0.85, contrast_bands: 1, n_mfcc: 1,
   // the descriptor families, each on / off (Miguel 2026-10-28, as DarkLibrosa's extract config); all on = her preset
   families: { zcr: true, rms: true, spectral: true, contrast: true, flux: true, mfcc: true, chroma: true, rhythm: true },
+  // channels (Miguel 2026-10-28): "mono" (her preset; DarkLibrosa's only working mode: its load mixes down), "midside"
+  // (mid = the mono mix, as before, plus the same features of the side signal (L − R) / 2 as side_* columns) or
+  // "descriptors" (the mono features plus per-frame stereo descriptors: inter-channel correlation, width = side / mid rms,
+  // balance = (L² − R²) / (L² + R²), each summarised like every feature as stereo_*)
+  stereo: "mono",
 };
+export const STEREO_FEATURES = ["stereo_corr", "stereo_width", "stereo_balance"];
 // the frame features of a configuration, in her preset's column order (spectral contrast: n_bands + 1 rows, as librosa)
 const FAM_OF = { zcr: "zcr", rms: "rms", spectral_centroid: "spectral", spectral_bandwidth: "spectral", spectral_rolloff: "spectral",
   spectral_flatness: "spectral", spectral_flux: "flux", mfcc_0: "mfcc", chroma: "chroma" };
@@ -41,8 +47,10 @@ export function featuresOf(cfg = ANA_PRESET) {
 export const FEATURES = ["zcr", "rms", "spectral_centroid", "spectral_bandwidth", "spectral_rolloff", "spectral_flatness",
   "spectral_contrast_0", "spectral_contrast_1", "spectral_flux", "mfcc_0", "chroma"];
 export const STATS = ["mean", "median", "std", "min", "max"];
+const stereoFeaturesOf = (cfg) => cfg.stereo === "midside" ? featuresOf(cfg).map((f) => `side_${f}`) : cfg.stereo === "descriptors" ? STEREO_FEATURES : [];
 export const columnsOf = (cfg = ANA_PRESET) => [...featuresOf(cfg).flatMap((f) => STATS.map((s) => `${f}_${s}`)),
-  ...({ ...ANA_PRESET.families, ...(cfg.families || {}) }.rhythm ? ["tempo", "n_beats", "beat_density"] : [])];
+  ...({ ...ANA_PRESET.families, ...(cfg.families || {}) }.rhythm ? ["tempo", "n_beats", "beat_density"] : []),
+  ...stereoFeaturesOf(cfg).flatMap((f) => STATS.map((s) => `${f}_${s}`))];
 export const COLUMNS = columnsOf(ANA_PRESET);
 // The extras (Miguel 2026-10-28, opt-in, as DarkLibrosa's config: mel_features.mfcc.n_mfcc, chroma.chromagram aggregate
 // false): every MFCC above mfcc_0 (n_mfcc − 1 more, from the same mel spectrogram, DCT-II ortho) and the 12 chroma classes
@@ -161,6 +169,18 @@ function makeExtractor(cfg) {
   };
 }
 
+// the stereo descriptors per frame (frame 2048, centred, zero padding, as rms) from mid m and side s: L = m + s, R = m − s
+function stereoFrames(m, s, off, n, hop) {
+  const T = 1 + Math.floor(n / hop), corr = new Float64Array(T), width = new Float64Array(T), bal = new Float64Array(T);
+  for (let t = 0; t < T; t++) {
+    const s0 = t * hop - 1024; let ll = 0, rr = 0, lr = 0, mm = 0, ss = 0;
+    for (let i = 0; i < 2048; i++) { const k = s0 + i; if (k < 0 || k >= n) continue;
+      const a = m[off + k], b = s[off + k], l = a + b, r = a - b; ll += l * l; rr += r * r; lr += l * r; mm += a * a; ss += b * b; }
+    corr[t] = ll > 0 && rr > 0 ? lr / Math.sqrt(ll * rr) : 1; width[t] = mm > 0 ? Math.sqrt(ss / mm) : 0; bal[t] = ll + rr > 0 ? (ll - rr) / (ll + rr) : 0;
+  }
+  return { stereo_corr: corr, stereo_width: width, stereo_balance: bal };
+}
+
 // numpy's mean / median / std (ddof 0) / min / max over the frames
 function summarize(F, feats) {                                   // feats: the configuration's features (+ the extras)
   const row = {};
@@ -222,20 +242,31 @@ export function windows(len, sr, size, overlap = 0) {
 // One file. yNat: the mono native-rate signal (Float32Array, consumed); returns {duration, sr_native, peak, l0: row, l1: [rows]}.
 // The rhythm values use the onset envelope of the whole file, as the separate rhythm pass did (on the signal before the
 // peak normalisation: the envelope is the same, since the dB mel spectrogram only shifts with gain).
-export function analyseFile(yNat, srNat, cfg = ANA_PRESET, onProgress = null) {
-  const sr = cfg.sr;
+// sNat (optional): the side signal (L − R) / 2 at the native rate, for cfg.stereo "midside" / "descriptors"; it is resampled
+// and scaled with the mid's own peak gain (so side / mid ratios are kept), and clipped like the mid.
+export function analyseFile(yNat, srNat, cfg = ANA_PRESET, onProgress = null, sNat = null) {
+  const sr = cfg.sr, st = cfg.stereo && cfg.stereo !== "mono" ? cfg.stereo : null;
   let y = srNat === sr ? yNat : resample(yNat, srNat, sr);
+  let sd = st ? (sNat ? (srNat === sr ? sNat : resample(sNat, srNat, sr)) : new Float32Array(y.length)) : null;
   let peak = 0; for (let i = 0; i < y.length; i++) { const a = Math.abs(y[i]); if (a > peak) peak = a; }
-  if (cfg.normalize === "peak" && peak > 0) for (let i = 0; i < y.length; i++) y[i] = y[i] / peak;   // float32 division, as numpy
-  if (cfg.clip) for (let i = 0; i < y.length; i++) y[i] = Math.max(-1, Math.min(1, y[i]));
+  if (cfg.normalize === "peak" && peak > 0) { for (let i = 0; i < y.length; i++) y[i] = y[i] / peak;   // float32 division, as numpy
+    if (sd) for (let i = 0; i < sd.length; i++) sd[i] = sd[i] / peak; }
+  if (cfg.clip) { for (let i = 0; i < y.length; i++) y[i] = Math.max(-1, Math.min(1, y[i])); if (sd) for (let i = 0; i < sd.length; i++) sd[i] = Math.max(-1, Math.min(1, sd[i])); }
+  // the stereo columns of one window [a, a + len)
+  const SF = featuresOf(cfg);
+  const stereoRow = (a, len) => {
+    if (st === "midside") { const F = extract(sd, a, len), row = summarize(F, SF), out = {}; for (const k in row) out[`side_${k}`] = row[k]; return out; }
+    if (st === "descriptors") return summarize(stereoFrames(y, sd, a, len, cfg.hop), STEREO_FEATURES);
+    return {};
+  };
   const n = y.length, duration = n / sr, extract = makeExtractor(cfg);
   const FE = [...featuresOf(cfg), ...extraFeatures(cfg.extras)], fam = { ...ANA_PRESET.families, ...(cfg.families || {}) };
-  const Fw = extract(y, 0, n), l0 = Object.assign({ window_start: 0, window_end: duration }, summarize(Fw, FE));
+  const Fw = extract(y, 0, n), l0 = Object.assign({ window_start: 0, window_end: duration }, summarize(Fw, FE), stereoRow(0, n));
   const rhythm = {};
   if (fam.rhythm) { rhythm.tempo = globalTempo(Fw.spectral_flux, sr, cfg.hop);
     rhythm.n_beats = countOnsets(Fw.spectral_flux, sr, cfg.hop); rhythm.beat_density = duration > 0 ? rhythm.n_beats / duration : 0; }
   Object.assign(l0, rhythm);
   const W = windows(n, sr, cfg.window_s, cfg.overlap), l1 = [];
-  W.forEach(([a, b], i) => { l1.push(Object.assign({ window_start: a / sr, window_end: b / sr }, summarize(extract(y, a, b - a), FE), rhythm)); if (onProgress) onProgress(i + 1, W.length); });
+  W.forEach(([a, b], i) => { l1.push(Object.assign({ window_start: a / sr, window_end: b / sr }, summarize(extract(y, a, b - a), FE), rhythm, stereoRow(a, b - a))); if (onProgress) onProgress(i + 1, W.length); });
   return { duration, sr_native: srNat, peak, l0, l1 };   // peak: of the mono mix before normalising (the page's level matching)
 }

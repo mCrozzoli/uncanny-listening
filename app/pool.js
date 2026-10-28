@@ -33,11 +33,12 @@ export function analyseSongs(songs, { cfg = {}, workers = Math.max(1, Math.min(8
       try {
         const buf = await song.file.arrayBuffer(), fh = flacHeader(new Uint8Array(buf, 0, Math.min(buf.byteLength, 1 << 22)));
         let msg, n;
-        if (fh && fh.total) { n = fh.total; msg = { type: "song", id: song.id, flac: buf, cfg }; }
-        else { const { y, sr } = await decodeMono(buf); if (!y.length) throw new Error("decoded 0 samples"); n = y.length; msg = { type: "song", id: song.id, y, sr, cfg }; }
+        const side = !!cfg.stereo && cfg.stereo !== "mono";             // mid / side or stereo descriptors: the side signal too (twice the memory)
+        if (fh && fh.total) { n = fh.total * (side ? 2 : 1); msg = { type: "song", id: song.id, flac: buf, cfg }; }
+        else { const d = await decodeMono(buf, { side }); if (!d.y.length) throw new Error("decoded 0 samples"); n = d.y.length * (side ? 2 : 1); msg = { type: "song", id: song.id, y: d.y, sr: d.sr, s: d.s, cfg }; }
         while (inFlight > 0 && inFlight + n > budget) await new Promise((r) => setTimeout(r, 200));
         const q = free() || p; q.busy = { song, n }; inFlight += n;
-        q.w.postMessage(msg, [msg.flac || msg.y.buffer]);
+        q.w.postMessage(msg, msg.flac ? [msg.flac] : msg.s ? [msg.y.buffer, msg.s.buffer] : [msg.y.buffer]);
       } catch (e) { failed++; onSong(song, { error: String(e && e.message || e) }); onProgress({ finished: done + failed, n: songs.length }); }
       decoding = false;
       pump();
