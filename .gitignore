@@ -1,0 +1,12 @@
+# audio and data never enter this repo
+*.wav
+*.aif
+*.aiff
+*.flac
+*.mp3
+*.m4a
+*.ogg
+*.csv
+*.parquet
+.DS_Store
+__pycache__/
