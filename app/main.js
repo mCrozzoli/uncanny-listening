@@ -465,7 +465,7 @@ function renderInfo() {
     ${L !== s.ci ? `<span class="k">${t("folder")}</span><span>${esc(s.cls)} <span class="k">(${t("edited")})</span></span>` : ""}
     ${s.km == null ? "" : `<span class="k">${t("cluster")}</span><span>${s.km < 0 ? t("no_cluster") : s.km} · ${s.km === L ? t("agrees") : "<b>" + t("disagrees") + "</b>"}</span>`}
     ${s.p ? `<span class="k">${t("model")}</span><span>${esc(S.analysis.classes[s.pred])} · p ${s.p[s.pred].toFixed(2)} ${s.pred === L ? "" : "· <b>" + t("disagrees") + "</b>"}</span>` : ""}
-    <span class="k">${t("duration")}</span><span>${fmtT(s.duration)} · ${(s.sr_native / 1000).toFixed(1)} kHz</span></div>
+    <span class="k">${t("duration")}</span><span>${fmtT(s.duration)}${Number.isFinite(s.sr_native) ? ` · ${(s.sr_native / 1000).toFixed(1)} kHz` : ""}</span></div>
     <div class="row"><button class="btn sm" id="pp">${playing ? "■ " + t("stop") : "▶ " + t("play")}</button><span class="k" id="ptime"></span></div>
     <div class="k small">${t("segments_strip")}</div><div id="strip"></div>${s.segP ? `<div id="strip2"></div><div class="k small">${t("segments_pred")}</div>` : ""}`;
   $("#pp").onclick = () => playing ? player.stop() : player.play(s);
