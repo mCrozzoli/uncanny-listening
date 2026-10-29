@@ -30,7 +30,8 @@ export const ANA_PRESET = {
   // channels (Miguel 2026-10-28): "mono" (her preset; DarkLibrosa's only working mode: its load mixes down), "midside"
   // (mid = the mono mix, as before, plus the same features of the side signal (L − R) / 2 as side_* columns) or
   // "descriptors" (the mono features plus per-frame stereo descriptors: inter-channel correlation, width = side / mid rms,
-  // balance = (L² − R²) / (L² + R²), each summarised like every feature as stereo_*)
+  // balance = (L² − R²) / (L² + R²), each summarised like every feature as stereo_*) or "both" (mid, side_*, then stereo_*,
+  // as DarkLibrosa's sound_normalize.stereo = 'both' since its stereo fix, 2026-10-28)
   stereo: "mono",
 };
 export const STEREO_FEATURES = ["stereo_corr", "stereo_width", "stereo_balance"];
@@ -47,7 +48,8 @@ export function featuresOf(cfg = ANA_PRESET) {
 export const FEATURES = ["zcr", "rms", "spectral_centroid", "spectral_bandwidth", "spectral_rolloff", "spectral_flatness",
   "spectral_contrast_0", "spectral_contrast_1", "spectral_flux", "mfcc_0", "chroma"];
 export const STATS = ["mean", "median", "std", "min", "max"];
-const stereoFeaturesOf = (cfg) => cfg.stereo === "midside" ? featuresOf(cfg).map((f) => `side_${f}`) : cfg.stereo === "descriptors" ? STEREO_FEATURES : [];
+const stereoFeaturesOf = (cfg) => [...(cfg.stereo === "midside" || cfg.stereo === "both" ? featuresOf(cfg).map((f) => `side_${f}`) : []),
+  ...(cfg.stereo === "descriptors" || cfg.stereo === "both" ? STEREO_FEATURES : [])];
 export const columnsOf = (cfg = ANA_PRESET) => [...featuresOf(cfg).flatMap((f) => STATS.map((s) => `${f}_${s}`)),
   ...({ ...ANA_PRESET.families, ...(cfg.families || {}) }.rhythm ? ["tempo", "n_beats", "beat_density"] : []),
   ...stereoFeaturesOf(cfg).flatMap((f) => STATS.map((s) => `${f}_${s}`))];
@@ -255,9 +257,10 @@ export function analyseFile(yNat, srNat, cfg = ANA_PRESET, onProgress = null, sN
   // the stereo columns of one window [a, a + len)
   const SF = featuresOf(cfg);
   const stereoRow = (a, len) => {
-    if (st === "midside") { const F = extract(sd, a, len), row = summarize(F, SF), out = {}; for (const k in row) out[`side_${k}`] = row[k]; return out; }
-    if (st === "descriptors") return summarize(stereoFrames(y, sd, a, len, cfg.hop), STEREO_FEATURES);
-    return {};
+    const out = {};
+    if (st === "midside" || st === "both") { const row = summarize(extract(sd, a, len), SF); for (const k in row) out[`side_${k}`] = row[k]; }
+    if (st === "descriptors" || st === "both") Object.assign(out, summarize(stereoFrames(y, sd, a, len, cfg.hop), STEREO_FEATURES));
+    return out;
   };
   const n = y.length, duration = n / sr, extract = makeExtractor(cfg);
   const FE = [...featuresOf(cfg), ...extraFeatures(cfg.extras)], fam = { ...ANA_PRESET.families, ...(cfg.families || {}) };

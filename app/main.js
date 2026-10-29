@@ -583,7 +583,9 @@ const stepKnob = (key, label, list, get, set, fmt, def) => ({ key, label, value:
 const SR_LIST = [22050, 32000, 44100, 48000], NFFT_LIST = [1024, 2048, 4096, 8192], HOP_LIST = [128, 256, 512, 1024];
 const presetDiff = (P = S.preset) => {
   const A = ANA_PRESET, d = [];
-  if ((P.stereo || "mono") !== A.stereo) d.push(P.stereo === "midside" ? "channels mid / side (side features as side_* columns)" : "channels: stereo descriptors (inter-channel correlation, width, balance as stereo_* columns)");
+  if ((P.stereo || "mono") !== A.stereo) d.push(P.stereo === "midside" ? "channels mid / side (side features as side_* columns)"
+    : P.stereo === "both" ? "channels: both (side features as side_* columns, and inter-channel correlation, width, balance as stereo_* columns)"
+    : "channels: stereo descriptors (inter-channel correlation, width, balance as stereo_* columns)");
   if (P.sr !== A.sr) d.push(`sr ${P.sr / 1000} kHz`); if (P.normalize !== A.normalize) d.push(P.normalize === "peak" ? "peak" : "no peak normalisation");
   if (P.clip !== A.clip) d.push(P.clip ? "clip" : "no clipping"); if (P.nFft !== A.nFft) d.push(`n_fft ${P.nFft}`); if (P.hop !== A.hop) d.push(`hop ${P.hop}`);
   if (P.rolloff_percent !== A.rolloff_percent) d.push(`rolloff ${P.rolloff_percent.toFixed(2)}`); if (P.contrast_bands !== A.contrast_bands) d.push(`contrast ${P.contrast_bands} bands`);
@@ -604,7 +606,7 @@ function renderFeatures() {
   // signal
   srow(box, { name: t("f_sr"), note: t("f_sr_how"), knobs: [sk(["sr", "kHz", SR_LIST, () => P.sr, (v) => { P.sr = v; P.contrast_bands = Math.min(P.contrast_bands, maxBands()); }, (v) => (v / 1000).toFixed(v % 1000 ? 2 : 0), 44100])] });
   srow(box, { id: "f:channels", name: t("f_channels"), note: t("f_channels_how_" + (P.stereo || "mono")),
-    choice: { value: P.stereo || "mono", opts: [["mono", t("ch_mono")], ["midside", t("ch_ms")], ["descriptors", t("ch_desc")]], pick: (v) => { P.stereo = v; renderFeatures(); } } });
+    choice: { value: P.stereo || "mono", opts: [["mono", t("ch_mono")], ["midside", t("ch_ms")], ["descriptors", t("ch_desc")], ["both", t("ch_both")]], pick: (v) => { P.stereo = v; renderFeatures(); } } });
   srow(box, { name: t("f_peak"), note: t("f_peak_how"), on: P.normalize === "peak", toggle: () => { P.normalize = P.normalize === "peak" ? "none" : "peak"; renderFeatures(); } });
   srow(box, { name: t("f_clip"), note: t("f_clip_how"), on: !!P.clip, toggle: () => { P.clip = !P.clip; renderFeatures(); } });
   srow(box, { name: "STFT", note: t("f_stft_how"), knobs: [sk(["nfft", "n_fft", NFFT_LIST, () => P.nFft, (v) => { P.nFft = v; if (P.hop > v / 2) P.hop = v / 2; }, String, 2048]),
