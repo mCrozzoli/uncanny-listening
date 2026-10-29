@@ -24,6 +24,7 @@
   <span class="grow"></span>
   <button class="btn sm" id="open2" data-i18n="classes_btn"></button>
   <span class="seg"><button class="btn sm" id="o_save" data-i18n="o_save"></button><button class="btn sm" id="o_open" data-i18n="o_open"></button><button class="btn sm" id="o_link" data-i18n="o_link"></button></span>
+  <button class="btn sm" id="langbtn" aria-label="language"><span data-l="es">es</span>/<span data-l="en">en</span></button>
   <button class="btn sm" id="livebtn" data-i18n="live" aria-expanded="false"></button>
 </header>
 <main id="app">
@@ -99,20 +100,19 @@
       <div class="seg wide"><button class="btn sm" id="hovertog"></button></div>
       <h4 data-i18n="look_h"></h4>
       <div id="looks"></div>
-      <h4 data-i18n="lang_h"></h4>
-      <div class="seg wide"><button class="btn sm" data-lang="en">English</button><button class="btn sm" data-lang="es">Español</button></div>
     </section>
     <section class="pane" data-pane="lens">
       <h4 data-i18n="knobs"></h4>
       <p class="k small" data-i18n="knobs_how"></p>
       <div id="knobs"></div>
+      <div id="flipout"></div>
+      <div id="edits" hidden></div>
       <div id="modelout"></div>
     </section>
     <section class="pane" data-pane="sound">
       <h4 data-i18n="volume"></h4>
       <input type="range" id="vol" min="0" max="1" step="0.01" value="0.8">
       <div id="pairsound"></div>
-      <div id="walkout"></div>
       <h4 data-i18n="live_h"></h4>
       <div class="row"><span id="livelight2" class="light"></span><span id="livestate2" class="k"></span><span class="grow"></span><button class="btn sm" id="liveopen" data-i18n="live_panel"></button></div>
       <p class="k small" data-i18n="sound_note"></p>
@@ -126,8 +126,6 @@
       <div class="k small" data-i18n="trace_how"></div>
       <ol id="tracelist"></ol>
       <div class="row"><button class="btn sm" id="traceclear" data-i18n="clear"></button></div>
-      <div id="listout"></div>
-      <div id="edits" hidden></div>
     </section>
     <section class="pane" data-pane="output">
       <h4 data-i18n="st_h"></h4>

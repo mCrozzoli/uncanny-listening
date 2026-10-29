@@ -11,32 +11,52 @@ const d3 = window.d3;
 const NS = "http://www.w3.org/2000/svg";
 
 export function makeMaps(root, ctx) {
-  let defs = [], cells = [];
-  // the width to lay out in: the maps' own, or (while they are hidden behind another view) their parent's
-  const cw = () => root.clientWidth || (root.parentElement && root.parentElement.clientWidth) || 900;
-  const W = () => Math.max(220, Math.min(420, Math.floor((cw() - 24) / Math.max(1, Math.min(defs.length, cols())))) - 12);
-  const cols = () => cw() > 1250 ? 4 : cw() > 900 ? 3 : cw() > 560 ? 2 : 1;
+  // Layout (Miguel 2026-10-29): the main map (defs[0]) fills the display; the other maps sit as thumbnails in a strip at
+  // the bottom, the proposed one as a thumbnail in the top-right corner; clicking a thumbnail splits the display half and
+  // half (main + that map), × closes the split. Thumbnails are drawn at a larger internal size and scaled down, so a figure
+  // export stays sharp; they take no pointer events except the click that opens them.
+  let defs = [], cells = [], second = null;
+  const key = (d) => `${d.x}|${d.y}|${d.proposed ? 1 : 0}`, GAP = 12, THUMB = 118, PIP = 150, INNER = 300;
+  const box = () => { const pe = root.parentElement, cs = pe ? getComputedStyle(pe) : null;
+    const pad = (a, b) => (cs ? parseFloat(cs[a]) + parseFloat(cs[b]) : 0);
+    return { w: root.clientWidth || (pe ? pe.clientWidth - pad("paddingLeft", "paddingRight") : 900), h: root.clientHeight || (pe ? pe.clientHeight - pad("paddingTop", "paddingBottom") : 700) }; };
+  const div = (cls) => { const d = document.createElement("div"); d.className = cls; return d; };
 
   function build() {
-    root.innerHTML = ""; cells = [];
-    const big = defs[0] && defs[0].big;
-    defs.forEach((def, i) => {
-      const fig = document.createElement("figure"); fig.className = "map" + (big && i === 0 ? " big" : "");
+    root.innerHTML = ""; cells = []; root.classList.add("mlayout");
+    if (!defs.length) return;
+    if (second && !defs.some((d) => key(d) === second)) second = null;
+    const main = defs[0], prop = defs.find((d, i) => i > 0 && d.proposed), rest = defs.slice(1).filter((d) => d !== prop);
+    const sec = second ? defs.find((d) => key(d) === second) : null;
+    const { w, h } = box(), stripH = rest.length - (sec && rest.includes(sec) ? 1 : 0) > 0 ? THUMB + 34 : 0;
+    const stageH = Math.max(260, h - stripH - (stripH ? GAP : 0)), cap = 30;
+    // the stage cells fill the stage (width × height, not square: every axis is 0–1 already)
+    const sh = Math.floor(Math.max(220, stageH - cap)), sw = Math.floor(Math.max(260, sec ? (w - GAP) / 2 - 14 : w - 14));
+    const stage = div("mstage"), strip = div("mstrip"); root.append(stage);
+    cell(main, stage, sw, sh, sw, sh, "main");
+    if (sec) cell(sec, stage, sw, sh, sw, sh, "second");
+    if (prop && prop !== sec) { const pip = div("mpip"); stage.append(pip); cell(prop, pip, INNER, INNER, PIP, PIP, "thumb"); }
+    for (const d of rest) if (d !== sec) cell(d, strip, INNER, INNER, THUMB, THUMB, "thumb");
+    if (strip.children.length) root.append(strip);
+    update();
+  }
+  function cell(def, parent, vw, vh, showW, showH, role) {
+      const fig = document.createElement("figure"); fig.className = "map" + (role === "main" ? " big" : "") + (role === "thumb" ? " mthumb" : "") + (role === "second" ? " msecond" : "");
       const cap = document.createElement("figcaption"); fig.appendChild(cap);
-      const size = big && i === 0 ? Math.max(W(), Math.min(2 * W() + 12, cw() - 24)) : W(), m = { l: 42, r: 8, t: 6, b: 28 };
-      const svg = d3.select(fig).append("svg").attr("viewBox", `0 0 ${size} ${size}`).attr("width", size).attr("height", size).attr("class", "mapsvg");
-      const iw = size - m.l - m.r, ih = size - m.t - m.b, x = d3.scaleLinear().domain([-0.03, 1.03]).range([m.l, m.l + iw]), y = d3.scaleLinear().domain([-0.03, 1.03]).range([m.t + ih, m.t]);
+      const m = { l: 42, r: 8, t: 6, b: 28 };
+      const svg = d3.select(fig).append("svg").attr("viewBox", `0 0 ${vw} ${vh}`).attr("width", showW).attr("height", showH).attr("class", "mapsvg");
+      const iw = vw - m.l - m.r, ih = vh - m.t - m.b, x = d3.scaleLinear().domain([-0.03, 1.03]).range([m.l, m.l + iw]), y = d3.scaleLinear().domain([-0.03, 1.03]).range([m.t + ih, m.t]);
       svg.append("rect").attr("class", "frame").attr("x", m.l).attr("y", m.t).attr("width", iw).attr("height", ih);
       const gField = svg.append("g").attr("class", "field"), gAx = svg.append("g").attr("class", "axes");
       gAx.append("g").attr("transform", `translate(0,${m.t + ih})`).call(d3.axisBottom(x).ticks(4).tickSize(3));
       gAx.append("g").attr("transform", `translate(${m.l},0)`).call(d3.axisLeft(y).ticks(4).tickSize(3));
-      const xl = gAx.append("text").attr("class", "axlabel").attr("x", m.l + iw).attr("y", size - 2).attr("text-anchor", "end");
+      const xl = gAx.append("text").attr("class", "axlabel").attr("x", m.l + iw).attr("y", vh - 2).attr("text-anchor", "end");
       const yl = gAx.append("text").attr("class", "axlabel").attr("transform", `translate(10,${m.t}) rotate(-90)`).attr("text-anchor", "end");
       const gTrace = svg.append("g").attr("class", "trace"), gPts = svg.append("g").attr("class", "pts"), gTop = svg.append("g").attr("class", "top");
       const gTool = svg.append("g").attr("class", "tool"), trail = gTool.append("path").attr("class", "trail");
       const ov = gTool.append("rect").attr("class", "toolov").attr("x", m.l).attr("y", m.t).attr("width", iw).attr("height", ih);
       let stroke = null;
-      ov.on("pointerdown", (ev) => { if (ctx.tool() === "none") return; ev.preventDefault(); ov.node().setPointerCapture(ev.pointerId); stroke = [d3.pointer(ev, svg.node())]; trail.attr("d", null); })
+      if (role !== "thumb") ov.on("pointerdown", (ev) => { if (ctx.tool() === "none") return; ev.preventDefault(); ov.node().setPointerCapture(ev.pointerId); stroke = [d3.pointer(ev, svg.node())]; trail.attr("d", null); })
         .on("pointermove", (ev) => { if (!stroke) return; stroke.push(d3.pointer(ev, svg.node()));
           trail.attr("d", (ctx.tool() === "lasso" ? d3.line().curve(d3.curveLinearClosed) : d3.line())(stroke)).classed("closed", ctx.tool() === "lasso"); })
         .on("pointerup pointercancel", (ev) => {
@@ -48,10 +68,11 @@ export function makeMaps(root, ctx) {
             if (tool === "lasso" ? pts.length > 2 && d3.polygonContains(pts, [px, py]) : near(px, py)) ids.add(sg.id); }
           ctx.on.brush(ids, ev);
         });
-      cells.push({ def, fig, cap, svg, x, y, gField, gTrace, gPts, gTop, xl, yl, size });
-      root.appendChild(fig);
-    });
-    update();
+      if (role === "thumb") { fig.title = ctx.openLabel ? ctx.openLabel() : ""; fig.onclick = (e) => { if (e.target.closest("button")) return; second = key(def); build(); }; }
+      if (role === "second") { const b = document.createElement("button"); b.className = "btn sm mclose"; b.textContent = "×"; b.setAttribute("aria-label", "close");
+        b.onclick = () => { second = null; build(); }; fig.appendChild(b); }
+      cells.push({ def, fig, cap, svg, x, y, gField, gTrace, gPts, gTop, xl, yl, size: vw, role });
+      parent.appendChild(fig);
   }
 
   function update() {

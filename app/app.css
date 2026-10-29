@@ -273,3 +273,48 @@ body.leg-open .ltab { left: 360px; }
 .srow > .xm { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px; }
 #setup .sub { margin: 10px 0 2px; text-transform: uppercase; letter-spacing: .12em; font-size: 10px; }
 #presethead { margin: 2px 0 4px; } #presethead .changed { color: var(--ds-cur-txt, #c80); }
+
+/* the legend's walks (Miguel 10-29): one row per list, ▶ plays it as a walk, the names open under it */
+.lg-walk summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; }
+.lg-walk summary::-webkit-details-marker { display: none; }
+.lg-walk summary .lg-chip { margin-left: auto; }
+.lg-walk ol { margin: 4px 0 2px 18px; padding: 0; max-height: 160px; overflow: auto; font-size: 11px; }
+.lg-walk li { cursor: pointer; } .lg-walk li:hover { color: var(--ds-txt-hi); }
+/* the language toggle in the top bar */
+#langbtn span { opacity: .45; } #langbtn span.on { opacity: 1; font-weight: 700; }
+/* the maps (Miguel 10-29): main map fills the display; a strip of thumbnails at the bottom; the proposed map as a thumbnail
+   top right; a click on a thumbnail splits the display half and half */
+#maps.mlayout { display: flex; flex-direction: column; gap: 12px; height: 100%; min-height: 0; }
+#maps.mlayout[hidden] { display: none; }
+.mstage { flex: 1; min-height: 0; display: flex; gap: 12px; justify-content: center; align-items: flex-start; position: relative; }
+.mpip { position: absolute; top: 0; right: 0; z-index: 3; box-shadow: var(--ds-pop-shadow, 0 2px 10px rgba(0,0,0,.18)); border-radius: 4px; }
+.mstrip { flex: none; display: flex; gap: 10px; overflow-x: auto; padding-bottom: 2px; }
+figure.map { position: relative; }
+figure.map.mthumb { cursor: pointer; padding: 4px; }
+figure.map.mthumb svg { pointer-events: none; display: block; }
+figure.map.mthumb figcaption { font-size: 10px; max-width: 118px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0 0 2px 2px; }
+.mpip figure.map.mthumb figcaption { max-width: 150px; }
+figure.map.mthumb figcaption button { display: none; }
+figure.map.mthumb:hover { border-color: var(--ds-accent); }
+.mclose { position: absolute; top: 4px; right: 4px; }
+
+/* minimal pairs (Miguel 10-29): named rows, numbered pairs, room between the rows */
+#pairs .pairsvg .lane { stroke: var(--ds-line); stroke-width: 1; }
+#pairs .pairsvg .lanename { font-size: 12px; }
+#pairs .pairsvg .pairend { fill: var(--ds-panel); stroke: var(--ds-dim); stroke-width: 1.2; }
+#pairs .pairsvg .pairno { font-size: 10px; fill: var(--ds-txt-hi); paint-order: stroke; stroke: var(--ds-bg); stroke-width: 3px; }
+#pairs .pairg.on .pairend { stroke: var(--ds-txt-hi); stroke-width: 2; }
+#pairs .pairg.on .pairline { stroke: var(--ds-txt-hi); stroke-width: 2.6; opacity: 1; }
+#pairs .pairg:hover .pairline { stroke: var(--ds-txt); opacity: 1; }
+/* the tabs size to their words (selection / selección is the longest) */
+#tabs { display: flex; gap: 3px; }
+#tabs .stab { flex: 1 1 auto; white-space: nowrap; padding: 5px 4px; }
+
+/* minimal pairs over time + the two stripes (Miguel 10-29) */
+#pairs .pairsvg .lanebox { fill: none; stroke: var(--ds-line); }
+#pairs .pairsvg .laneline { fill: none; stroke-width: 1.4; opacity: .75; }
+#pairs .stripes { margin-top: 6px; }
+#pairs .stripes .sdiff { fill: var(--ds-accent); opacity: .8; }
+#pairs .stripes .ssame { fill: var(--ds-dim); opacity: .55; }
+#pairs .stripes .pairg.on .sdiff, #pairs .stripes .pairg.on .ssame { opacity: 1; stroke: var(--ds-txt-hi); stroke-width: 1.5; }
+#pairs .stripes .pairg:hover .sdiff { opacity: 1; }

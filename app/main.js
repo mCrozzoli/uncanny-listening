@@ -53,7 +53,7 @@ const famOf = (c) => { if (/^(side|stereo)_/.test(c)) return "estereo"; if (/^mf
 export const S = (window.UL = {
   classes: [], files: [], songs: [], formats: "preset", useStored: true, source: null, analysis: null, running: false, stop: false,
   view: { mapset: "mean", colour: "class", tab: "view", side: true, live: false, left: null, card: false, info: true, hover: true, tool: "none", boundary: true, work: "maps", cmpLevel: "l0",
-          focus: "spectral_flux_mean", pairMode: "vary", pairSlice: 5, pairLevel: true, livePlays: false },
+          focus: "spectral_flux_mean", pairMode: "vary", pairPlot: "value", pairSlice: 5, pairLevel: true, livePlays: false },
   pair: null,               // a map pair proposed from the descriptor comparison: [x, y]
   sel: new Set(), hover: null, trace: [], brushed: null, k: null,
   pipe: { minmax: true, pca: true, density: true },             // the transformations, each on / off (Miguel 2026-10-28)
@@ -75,7 +75,7 @@ const LS = { get(k, d) { try { const v = localStorage.getItem("uncanny." + k); r
              set(k, v) { try { localStorage.setItem("uncanny." + k, JSON.stringify(v)); } catch (_) {} } };
 Object.assign(S.view, LS.get("view", {}), { live: false });
 const saveView = () => LS.set("view", { mapset: S.view.mapset, colour: S.view.colour, side: S.view.side, left: S.view.left, boundary: S.view.boundary,
-  focus: S.view.focus, pairMode: S.view.pairMode, pairSlice: S.view.pairSlice, pairLevel: S.view.pairLevel, info: S.view.info, hover: S.view.hover, tool: S.view.tool, tab: S.view.tab });
+  focus: S.view.focus, pairMode: S.view.pairMode, pairPlot: S.view.pairPlot, pairSlice: S.view.pairSlice, pairLevel: S.view.pairLevel, info: S.view.info, hover: S.view.hover, tool: S.view.tool, tab: S.view.tab });
 
 // ------------------------------------------------------------------ colours (the style kit's validated sets, per look)
 function classColours() {
@@ -329,7 +329,10 @@ function fieldFor(def) {
   fieldCache.set(key, F); return F;
 }
 function setupMaps() {
+  // the proposed map's × (its caption is redrawn when the layout changes, so the click is caught here)
+  $("#maps").addEventListener("click", (e) => { if (e.target.closest("#unpair")) { e.stopPropagation(); S.pair = null; renderAll(); } }, true);
   maps = makeMaps($("#maps"), {
+    openLabel: () => t("map_open"),
     songs: () => S.songs, value: valueOf, colour: colourOf, stroke: strokeOf, label: axisLabel, title: mapTitle,
     sel: () => S.sel, hover: () => S.hover, trace: () => S.trace, brushed: () => S.brushed, field: fieldFor,
     tool: () => S.view.tool, hoverOn: () => S.view.hover,
@@ -452,7 +455,7 @@ function renderClasses() {
     ${A.shown ? `<div><span class="k">${t("agree")}</span> <b>${pct(A.accuracy)}</b> <span class="k">· ${A.shown === "kmeans" ? `k ${A.k} · ` : ""}${t("mapping")} ${esc(JSON.stringify(A.mapping).replace(/"/g, ""))}</span></div>` : `<div class="k">${t("clu_none")}</div>`}` : "";
   // her label edits, newest first, each undoable
   const ed = $("#edits"); ed.hidden = !S.overrides.length;
-  ed.innerHTML = S.overrides.length ? `<h4>${t("edits")} · ${S.overrides.length}</h4>` + S.overrides.map((o, k) => ({ o, k })).reverse().map(({ o, k }) =>
+  ed.innerHTML = S.overrides.length ? `<h4>${t("edits")} · ${S.overrides.length}</h4><div class="k small">${t("edits_how")}</div>` + S.overrides.map((o, k) => ({ o, k })).reverse().map(({ o, k }) =>
     `<div class="edit"><span>${esc(o.name)}</span><span class="k">${esc(A.classes[o.from])} → <b>${esc(A.classes[o.to])}</b> · ${o.at.slice(11, 16)}</span><button class="btn sm" data-undo="${k}">${t("undo")}</button></div>`).join("") : "";
   ed.querySelectorAll("[data-undo]").forEach((b) => b.onclick = () => undoLabel(+b.dataset.undo));
 }
@@ -506,9 +509,9 @@ function songList(id, ids, title, clsOf = () => null, open = false) {
 }
 const LISTS = {};
 function renderModel() {
-  const box = $("#modelout"), wbox = $("#walkout"), lbox = $("#listout"); if (!box) return;
+  const box = $("#modelout"), wbox = $("#flipout"); if (!box) return;   // the walks are in the perceptual legend (Miguel 10-29)
   const r = S.model.res, A = S.analysis;
-  if (!A || !r) { box.innerHTML = `<p class="k">${t(A ? "training" : "model_wait")}</p>`; wbox.innerHTML = ""; lbox.innerHTML = ""; return; }
+  if (!A || !r) { box.innerHTML = `<p class="k">${t(A ? "training" : "model_wait")}</p>`; wbox.innerHTML = ""; renderLegend(); return; }
   const K = A.classes.length, L = S.songs.map(labelOf), km = S.songs.map((s) => s.km), pr = S.songs.map((s) => s.pred);
   const agree = (a, b) => a.filter((v, i) => v === b[i]).length / a.length;
   const fw = Object.entries(r.famW).sort((a, b) => b[1] - a[1]), wmax = Math.max(1e-9, ...fw.map((x) => x[1]));
@@ -520,20 +523,12 @@ function renderModel() {
   LISTS.flips = S.model.flips ? S.model.flips.ids : [];
   const C = classColours(), cn = (i) => `<i class="dot" style="background:${C[i]}"></i>${esc(A.classes[i])}`;
   wbox.innerHTML = `<h4>${t("flips")}</h4>
-    ${S.model.flips ? (LISTS.flips.length ? songList("flips", LISTS.flips, t("flipped", { cause: t("cause_" + S.model.flips.cause) }), (s) => s.pred, true) : `<div class="k small">${t("no_flips")}</div>`) : `<div class="k small">${t("turn_a_knob")}</div>`}
-    <h4>${t("walk_boundary")}</h4>
-    <div class="grid3"><button class="btn sm" data-wb="across">${t("wb_across")}</button><button class="btn sm" data-wb="uncertain">${t("wb_uncertain")}</button><button class="btn sm" data-wb="disagree">${t("wb_disagree")}</button></div>
-    <div class="k small">${t("wb_note")}</div>`;
-  lbox.innerHTML = `<h4>${t("disagreements")}</h4>
-    ${songList("km", LISTS.km, t("d_km"), (s) => s.km)}
-    ${songList("model", LISTS.model, t("d_model"), (s) => s.pred)}
-    ${songList("both", LISTS.both, t("d_both"), (s) => labelOf(s))}
-    ${songList("near", LISTS.near, t("d_near"), (s) => s.pred)}`;
+    ${S.model.flips ? (LISTS.flips.length ? songList("flips", LISTS.flips, t("flipped", { cause: t("cause_" + S.model.flips.cause) }), (s) => s.pred, true) : `<div class="k small">${t("no_flips")}</div>`) : `<div class="k small">${t("turn_a_knob")}</div>`}`;
   box.innerHTML = `
     <div class="scores">
       <div><span class="k">${t("model")} ↔ ${t("c_class")}</span> <b>${pct(r.acc)}</b> <span class="k">${t("fit")} · </span><b>${pct(r.cv)}</b> <span class="k">${t("cv", { n: r.folds })}</span></div>
-      ${A.shown ? `<div><span class="k">${cn()} ↔ ${t("c_class")}</span> <b>${pct(A.accuracy)}</b></div>
-      <div><span class="k">${cn()} ↔ ${t("model")}</span> <b>${pct(agree(km, pr))}</b></div>` : ""}
+      ${A.shown ? `<div><span class="k">${CLU[A.shown]} ↔ ${t("c_class")}</span> <b>${pct(A.accuracy)}</b></div>
+      <div><span class="k">${CLU[A.shown]} ↔ ${t("model")}</span> <b>${pct(agree(km, pr))}</b></div>` : ""}
       ${r.active ? "" : `<div class="warn">${t("all_off")}</div>`}
     </div>
     <h4>${t("weights")}</h4>
@@ -547,10 +542,10 @@ function renderModel() {
       <div class="k small">${t("clusterings_note")}</div>` : `<div class="k small">${t("clu_none")}</div>`}
     ${A.pending ? `<div class="k small">${t("computing")} ${A.pending.map((m) => CLU[m]).join(", ")}</div>` : ""}
     ${Object.entries(A.cluErr || {}).map(([m, e]) => `<div class="k small">${esc(CLU[m])}: ${esc(e)}</div>`).join("")}`;
-  for (const bx of [wbox, lbox]) bx.querySelectorAll("details.list li").forEach((li) => li.onclick = () => { S.sel = new Set([+li.dataset.id]); player.play(songById(+li.dataset.id)); renderInfo(); renderView(); maps.update(); });
+  for (const bx of [wbox]) bx.querySelectorAll("details.list li").forEach((li) => li.onclick = () => { S.sel = new Set([+li.dataset.id]); player.play(songById(+li.dataset.id)); renderInfo(); renderView(); maps.update(); });
   const clsOfList = { flips: (s) => s.pred, km: (s) => s.km, model: (s) => s.pred, both: (s) => labelOf(s), near: (s) => s.pred };
-  for (const bx of [wbox, lbox]) bx.querySelectorAll("[data-walk]").forEach((b) => b.onclick = (e) => { e.preventDefault(); walkList(LISTS[b.dataset.walk], clsOfList[b.dataset.walk], b.dataset.walk); });
-  wbox.querySelectorAll("[data-wb]").forEach((b) => b.onclick = () => walkBoundary(b.dataset.wb));
+  for (const bx of [wbox]) bx.querySelectorAll("[data-walk]").forEach((b) => b.onclick = (e) => { e.preventDefault(); walkList(LISTS[b.dataset.walk], clsOfList[b.dataset.walk], b.dataset.walk); });
+  renderLegend();
 }
 let knobs = null;
 function buildKnobs() {                                            // LENS: one gain knob per descriptor family (interaction, not processing)
@@ -682,7 +677,14 @@ function renderLegend() {
     cat4: DarkStyle.sets().cat4, dim: tok("--ds-dim", "#667"), has, selected: () => { const id = S.sel.size === 1 ? [...S.sel][0] : null; return id != null ? songById(id) : null; },
     close: () => setLeft(null),
     pick: (s, ci) => { S.sel = new Set([s.id]); S.brushed = null; const e = excerpt(s, ci); player.play(s, { t0: e.t0, t1: e.t1, meta: { level: 1, seg: e.seg } }); renderSide(); maps && maps.update(); },
-    hold: holdExtreme });
+    hold: holdExtreme,
+    // the walks (Miguel 10-29: the disagreement lists and walking the boundary belong to the legend, catalogue-style)
+    walks: () => S.model.res ? [["km", t("d_km")], ["model", t("d_model")], ["both", t("d_both")], ["near", t("d_near")]].filter(([k]) => k !== "km" && k !== "both" || (S.analysis && S.analysis.shown))
+      .map(([key, label]) => ({ key, label, ids: LISTS[key] || [] })) : [],
+    walk: (key) => walkList(LISTS[key] || [], { km: (s) => s.km, model: (s) => s.pred, both: (s) => labelOf(s), near: (s) => s.pred }[key], key),
+    walkB: (mode) => walkBoundary(mode),
+    hearSong: (id) => { S.sel = new Set([id]); player.play(songById(id)); renderSide(); maps && maps.update(); },
+    songName: (id) => (songById(id) || {}).name || "" });
   renderMapKey();
 }
 // HEAR: this song's own 10-s segment where a descriptor is lowest or highest; release returns to what was playing
@@ -751,7 +753,7 @@ function renderAll() {
   $("#cardstatus").textContent = S.running ? $("#status").textContent : $("#est").textContent; $("#analyse2").disabled = $("#analyse").disabled;
   $("#live").hidden = !S.view.live; $("#livebtn").classList.toggle("on", S.view.live);
   renderSide(); renderSetup(); renderLeft(); renderWork();
-  if (S.analysis) { if (!maps) setupMaps(); fieldCache.clear(); maps.setDefs(mapDefs()); const u = $("#unpair"); if (u) u.onclick = () => { S.pair = null; renderAll(); }; }
+  if (S.analysis) { if (!maps) setupMaps(); fieldCache.clear(); maps.setDefs(mapDefs()); }
   else { $("#maps").innerHTML = ""; if (maps) maps = null; }
 }
 
@@ -895,13 +897,16 @@ function renderPairs(vo) {
   const box = $("#pairs"), f = S.view.focus, fam = (LIVE_DESC.find((d) => d[0] === f) || LIVE_DESC[0])[2], fn = t(fam);
   const btn = (attr, val, cur, label) => `<button class="btn sm ${cur === val ? "on" : ""}" ${attr}="${val}">${label}</button>`;
   vo.innerHTML = `<h4>${t("pairs_feature")}</h4><select id="pfocus" class="wide">${focusOptions()}</select>
-    <div class="seg wide">${btn("data-pm", "vary", S.view.pairMode, t("pairs_vary"))}${btn("data-pm", "hold", S.view.pairMode, t("pairs_hold"))}</div>`;
+    <div class="seg wide">${btn("data-pm", "vary", S.view.pairMode, t("pairs_vary"))}${btn("data-pm", "hold", S.view.pairMode, t("pairs_hold"))}</div>
+    <h4>${t("pairs_plot")}</h4>
+    <div class="seg wide">${btn("data-pv", "value", S.view.pairPlot || "value", t("pairs_by_value"))}${btn("data-pv", "time", S.view.pairPlot || "value", t("pairs_by_time"))}</div>`;
   const ps = $("#pairsound");
   ps.innerHTML = `<h4>${t("v_pairs")}</h4><div class="k small">${t("pairs_slice")}</div><div class="seg wide">${[2.5, 5, 10].map((x) => btn("data-ps", x, S.view.pairSlice, x + " s")).join("")}</div>
     <div class="seg wide"><button class="btn sm ${levelMatch() ? "on" : ""}" id="plevel" ${f === "rms_mean" ? "disabled" : ""}>${t(f === "rms_mean" ? "pairs_level_rms" : S.view.pairLevel ? "pairs_level_on" : "pairs_level_off")}</button></div>
     <div class="seg wide"><button class="btn sm" id="pplay2">▶ ${t("pairs_play")}</button></div>`;
   $("#pfocus").value = f; $("#pfocus").onchange = (e) => setFocus(e.target.value);
   vo.querySelectorAll("[data-pm]").forEach((b) => b.onclick = () => { S.view.pairMode = b.dataset.pm; saveView(); renderWork(); });
+  vo.querySelectorAll("[data-pv]").forEach((b) => b.onclick = () => { S.view.pairPlot = b.dataset.pv; saveView(); renderWork(); });
   ps.querySelectorAll("[data-ps]").forEach((b) => b.onclick = () => { S.view.pairSlice = +b.dataset.ps; saveView(); renderWork(); });
   $("#plevel").onclick = () => { S.view.pairLevel = !S.view.pairLevel; saveView(); renderWork(); };
   const { songs, n, fromTrace } = pairSongs();
@@ -910,27 +915,93 @@ function renderPairs(vo) {
   const note = t(S.view.pairMode === "hold" ? "pairs_hold_note" : "pairs_vary_note", { f: fn }) + " " + (S.view.pairSlice >= ANA_PRESET.window_s ? t("pairs_whole") : t("pairs_slice_note", { s: S.view.pairSlice }));
   const capped = levelMatch() && P.some((p) => levelGains(p.a.v.rms_mean, p.a.song.peak, p.b.v.rms_mean, p.b.song.peak).capped);
   const tm = (x) => `${Math.floor(x.v.window_start / 60)}:${String(Math.round(x.v.window_start % 60)).padStart(2, "0")}`, val = (x) => (+x.v[f]).toPrecision(3);
-  const who = (x) => `<i class="dot" style="background:${lanes[laneOf.get(x.song)]}"></i>${esc(x.song.name)} <span class="k">${tm(x)} · ${val(x)}</span>`;
+  const who = (x) => `<i class="dot" style="background:${lanes[laneOf.get(x.song)]}"></i>${esc(x.song.name.replace(/\.[a-z0-9]+$/i, ""))} <span class="k">${tm(x)} · ${val(x)}</span>`;
+  const nOther = LIVE_DESC.filter((d) => d[0] !== f).length;
   box.innerHTML = `<div class="tlhead"><b>${esc(t(fromTrace ? "pairs_from_trace" : "pairs_from_sel"))}</b> <span class="k">· ${songs.length}${n > 4 ? " · " + t("pairs_more", { n }) : ""}</span></div>
     <div class="lanes">${songs.map((s, i) => `<span><i class="dot" style="background:${lanes[i]}"></i>${esc(s.name)} <span class="k">${esc(S.analysis.classes[labelOf(s)])}</span></span>`).join("")}</div>
     <p class="k small">${note}${capped ? " · " + t("pairs_capped") : ""}</p>
     <div id="pairplot"></div>
-    ${P.length ? `<div class="row"><button class="btn sm" id="pplay">▶ ${t("pairs_play")}</button></div>
-    <table class="conf pairs"><tr><th>#</th><th>A</th><th>B</th><th>${t("pairs_df", { f: esc(fn) })}</th><th title="${t("pairs_rest_title")}">${t("pairs_dr")}</th><th></th></tr>
+    <div id="pairstripes"></div>
+    ${P.length ? `<div class="row"><button class="btn sm" id="pplay">▶ ${t("pairs_play")}</button><span class="k small">${t(S.view.pairMode === "hold" ? "pairs_listen_hold" : "pairs_listen_vary", { f: esc(fn) })}</span></div>
+    <table class="conf pairs"><tr><th>#</th><th>A <span class="k">${t("pairs_ab", { f: esc(fn) })}</span></th><th>B <span class="k">${t("pairs_ab", { f: esc(fn) })}</span></th><th title="${t("pairs_z_title")}">${t("pairs_df", { f: esc(fn) })}</th><th title="${t("pairs_rest_title", { n: nOther })}">${t("pairs_dr", { n: nOther })}</th><th></th></tr>
       ${P.map((p, i) => `<tr data-pair="${i}"><td>${i + 1}</td><td>${who(p.a)}</td><td>${who(p.b)}</td><td>${p.df.toFixed(2)}</td><td>${p.dr.toFixed(2)}</td><td><button class="btn sm" data-pp="${i}">▶</button></td></tr>`).join("")}</table>` : `<p class="k">${t("pairs_none")}</p>`}`;
-  drawPairPlot($("#pairplot"), songs, P, lanes, laneOf);
+  (S.view.pairPlot === "time" ? drawPairTime : drawPairPlot)($("#pairplot"), songs, P, lanes, laneOf);
+  drawPairStripes($("#pairstripes"), P, fn);
   $("#pplay2").disabled = !P.length; $("#pplay2").onclick = () => P.length && playPairs(P);
   if (P.length) { $("#pplay").onclick = () => playPairs(P); box.querySelectorAll("[data-pp]").forEach((b) => b.onclick = () => playPairs(P, +b.dataset.pp)); }
   markPairs();
 }
-// one row per song, its segments along the focus feature (scaled over every segment); a line joins the two segments of a pair
+// one row per song (its name on the left), its segments along the focus feature, scaled 0–1 over every segment; a line joins
+// the two segments of a pair, numbered as in the table. Rows are tall so the lines stay apart (Miguel 10-29).
 function drawPairPlot(root, songs, P, lanes, laneOf) {
-  const f = S.view.focus, W = Math.max(420, root.clientWidth || 640), rh = 28, m = { l: 12, r: 12, t: 8, b: 22 }, H = m.t + rh * songs.length + m.b;
-  const x = d3.scaleLinear().domain([0, 1]).range([m.l, W - m.r]), y = (s) => m.t + rh * laneOf.get(s) + rh / 2;
-  const svg = d3.select(root).html("").append("svg").attr("class", "tlsvg").attr("viewBox", `0 0 ${W} ${H}`).attr("width", W).attr("height", H);
+  const f = S.view.focus, fam = (LIVE_DESC.find((d) => d[0] === f) || LIVE_DESC[0])[2];
+  const W = Math.max(520, root.clientWidth || 760), rh = songs.length > 3 ? 64 : 84, m = { l: 230, r: 16, t: 14, b: 40 }, H = m.t + rh * (songs.length - 1) + m.b + 12;
+  const x = d3.scaleLinear().domain([0, 1]).range([m.l, W - m.r]), y = (s) => m.t + 6 + rh * laneOf.get(s);
+  const svg = d3.select(root).html("").append("svg").attr("class", "tlsvg pairsvg").attr("viewBox", `0 0 ${W} ${H}`).attr("width", W).attr("height", H);
   svg.append("g").attr("class", "axes").attr("transform", `translate(0,${H - m.b})`).call(d3.axisBottom(x).ticks(5));
-  songs.forEach((s) => s.l1.forEach((r) => svg.append("circle").attr("cx", x(to01(1, f, r[f]))).attr("cy", y(s)).attr("r", 2.5).attr("fill", lanes[laneOf.get(s)]).attr("opacity", 0.45)));
-  P.forEach((p, i) => svg.append("line").attr("data-pair", i).attr("class", "pairline").attr("x1", x(to01(1, f, p.a.v[f]))).attr("y1", y(p.a.song)).attr("x2", x(to01(1, f, p.b.v[f]))).attr("y2", y(p.b.song)));
+  svg.append("text").attr("class", "axlabel").attr("x", W - m.r).attr("y", H - 6).attr("text-anchor", "end").text(t("pairs_axis", { f: t(fam), col: f }));
+  songs.forEach((s) => {
+    svg.append("line").attr("class", "lane").attr("x1", m.l).attr("x2", W - m.r).attr("y1", y(s)).attr("y2", y(s));
+    const nm = s.name.replace(/\.[a-z0-9]+$/i, "");
+    svg.append("text").attr("class", "lanename").attr("x", m.l - 10).attr("y", y(s) + 4).attr("text-anchor", "end").attr("fill", lanes[laneOf.get(s)]).text(nm.length > 28 ? nm.slice(0, 27) + "…" : nm);
+    s.l1.forEach((r) => svg.append("circle").attr("cx", x(to01(1, f, r[f]))).attr("cy", y(s)).attr("r", 2.6).attr("fill", lanes[laneOf.get(s)]).attr("opacity", 0.4));
+  });
+  P.forEach((p, i) => {
+    const x1 = x(to01(1, f, p.a.v[f])), y1 = y(p.a.song), x2 = x(to01(1, f, p.b.v[f])), y2 = y(p.b.song), g = svg.append("g").attr("data-pair", i).attr("class", "pairg");
+    g.append("line").attr("class", "pairline").attr("x1", x1).attr("y1", y1).attr("x2", x2).attr("y2", y2);
+    g.append("circle").attr("class", "pairend").attr("cx", x1).attr("cy", y1).attr("r", 4); g.append("circle").attr("class", "pairend").attr("cx", x2).attr("cy", y2).attr("r", 4);
+    const t0 = 0.5 + ((i % 3) - 1) * 0.18;                       // number labels spread along the line so they do not stack
+    g.append("text").attr("class", "pairno").attr("x", x1 + (x2 - x1) * t0).attr("y", y1 + (y2 - y1) * t0 + 3).attr("text-anchor", "middle").text(i + 1);
+    g.on("click", () => playPairs(P, i)).style("cursor", "pointer");
+  });
+}
+
+// the time view (Miguel 10-29, as L1 in DarkSonification): one row per song, the focus feature over the song's own time
+// (one point per 10 s segment, at its centre, scaled 0–1 over every segment); a pair joins A's moment to B's moment
+function drawPairTime(root, songs, P, lanes, laneOf) {
+  const f = S.view.focus, fam = (LIVE_DESC.find((d) => d[0] === f) || LIVE_DESC[0])[2];
+  const W = Math.max(560, root.clientWidth || 800), rh = songs.length > 3 ? 86 : 110, gap = 18, m = { l: 230, r: 16, t: 10, b: 40 };
+  const H = m.t + songs.length * rh + (songs.length - 1) * gap + m.b, T = Math.max(...songs.map((s) => s.duration || 0), 10);
+  const x = d3.scaleLinear().domain([0, T]).range([m.l, W - m.r]), top = (s) => m.t + laneOf.get(s) * (rh + gap);
+  const yv = (s, v) => top(s) + rh - 4 - (rh - 8) * Math.max(0, Math.min(1, v)), mid = (r) => (r.window_start + r.window_end) / 2;
+  const svg = d3.select(root).html("").append("svg").attr("class", "tlsvg pairsvg").attr("viewBox", `0 0 ${W} ${H}`).attr("width", W).attr("height", H);
+  svg.append("g").attr("class", "axes").attr("transform", `translate(0,${H - m.b})`).call(d3.axisBottom(x).ticks(8).tickFormat((v) => `${Math.floor(v / 60)}:${String(Math.round(v % 60)).padStart(2, "0")}`));
+  svg.append("text").attr("class", "axlabel").attr("x", W - m.r).attr("y", H - 6).attr("text-anchor", "end").text(t("pairs_time_axis", { f: t(fam), col: f }));
+  songs.forEach((s) => {
+    const c = lanes[laneOf.get(s)], y0 = top(s), nm = s.name.replace(/\.[a-z0-9]+$/i, "");
+    svg.append("rect").attr("class", "lanebox").attr("x", m.l).attr("y", y0).attr("width", W - m.l - m.r).attr("height", rh);
+    svg.append("text").attr("class", "lanename").attr("x", m.l - 10).attr("y", y0 + rh / 2 + 4).attr("text-anchor", "end").attr("fill", c).text(nm.length > 28 ? nm.slice(0, 27) + "…" : nm);
+    const pts = s.l1.map((r) => [x(mid(r)), yv(s, to01(1, f, r[f]))]);
+    svg.append("path").attr("class", "laneline").attr("d", d3.line()(pts)).attr("stroke", c);
+    pts.forEach(([px, py]) => svg.append("circle").attr("cx", px).attr("cy", py).attr("r", 1.8).attr("fill", c).attr("opacity", 0.6));
+  });
+  P.forEach((p, i) => {
+    const x1 = x(mid(p.a.v)), y1 = yv(p.a.song, to01(1, f, p.a.v[f])), x2 = x(mid(p.b.v)), y2 = yv(p.b.song, to01(1, f, p.b.v[f]));
+    const g = svg.append("g").attr("data-pair", i).attr("class", "pairg").style("cursor", "pointer").on("click", () => playPairs(P, i));
+    g.append("path").attr("class", "pairline").attr("d", `M${x1},${y1} C${x1},${(y1 + y2) / 2} ${x2},${(y1 + y2) / 2} ${x2},${y2}`).attr("fill", "none");
+    g.append("circle").attr("class", "pairend").attr("cx", x1).attr("cy", y1).attr("r", 4); g.append("circle").attr("class", "pairend").attr("cx", x2).attr("cy", y2).attr("r", 4);
+    g.append("text").attr("class", "pairno").attr("x", (x1 + x2) / 2).attr("y", (y1 + y2) / 2 + 3).attr("text-anchor", "middle").text(i + 1);
+  });
+}
+// the two stripes under the plot (Miguel 10-29): one column per pair, in the table's order; top = how much the pair differs
+// in the feature, bottom = how much it coincides in the rest (both relative to the pairs shown); a column plays its pair
+function drawPairStripes(root, P, fn) {
+  if (!P.length) { root.innerHTML = ""; return; }
+  const W = Math.max(520, root.clientWidth || 760), m = { l: 230, r: 16 }, sh = 34, H = 2 * sh + 34;
+  const maxF = Math.max(...P.map((p) => p.df), 1e-9), maxR = Math.max(...P.map((p) => p.dr), 1e-9), bw = (W - m.l - m.r) / P.length;
+  const svg = d3.select(root).html("").append("svg").attr("class", "pairsvg stripes").attr("viewBox", `0 0 ${W} ${H}`).attr("width", W).attr("height", H);
+  const label = (y, l1, l2) => { const tx = svg.append("text").attr("class", "lanename").attr("x", m.l - 10).attr("y", y).attr("text-anchor", "end");
+    tx.append("tspan").text(l1); tx.append("tspan").attr("x", m.l - 10).attr("dy", 14).attr("class", "k").text(l2); };
+  label(sh - 18, t("pairs_stripe_diff1"), fn); label(sh + 14, t("pairs_stripe_same1"), t("pairs_stripe_same2", { n: LIVE_DESC.length - 1 }));
+  svg.append("line").attr("class", "lane").attr("x1", m.l).attr("x2", W - m.r).attr("y1", sh).attr("y2", sh);
+  P.forEach((p, i) => {
+    const x0 = m.l + i * bw + 3, w = Math.max(4, bw - 6), hf = (sh - 4) * p.df / maxF, hr = (sh - 4) * (1 - p.dr / maxR * 0.85);
+    const g = svg.append("g").attr("data-pair", i).attr("class", "pairg stripe").style("cursor", "pointer").on("click", () => playPairs(P, i));
+    g.append("title").text(`${i + 1} · ${t("pairs_df", { f: fn })} ${p.df.toFixed(2)} · ${t("pairs_dr", { n: LIVE_DESC.length - 1 })} ${p.dr.toFixed(2)}`);
+    g.append("rect").attr("class", "sdiff").attr("x", x0).attr("width", w).attr("y", sh - hf).attr("height", hf);
+    g.append("rect").attr("class", "ssame").attr("x", x0).attr("width", w).attr("y", sh + 4).attr("height", hr);
+    g.append("text").attr("class", "pairno").attr("x", x0 + w / 2).attr("y", H - 4).attr("text-anchor", "middle").text(i + 1);
+  });
 }
 
 // ------------------------------------------------------------------ outputs (P4): session, CSVs, figures, methods note
@@ -941,7 +1012,7 @@ function sessionData() {
     source: S.source, useStored: S.useStored,
     overrides: S.overrides, model: { gains: S.model.gains, C: S.model.C, thr: S.model.thr }, k: S.k, kOf: S.kOf, pipe: S.pipe, clu: S.clu, cluster: S.cluster, presetUsed: S.usedPreset || null,
     view: { mapset: S.view.mapset, colour: S.view.colour, boundary: S.view.boundary, work: S.view.work, cmpLevel: S.view.cmpLevel,
-            focus: S.view.focus, pairMode: S.view.pairMode, pairSlice: S.view.pairSlice, pairLevel: S.view.pairLevel },
+            focus: S.view.focus, pairMode: S.view.pairMode, pairPlot: S.view.pairPlot, pairSlice: S.view.pairSlice, pairLevel: S.view.pairLevel },
     sel: [...S.sel], trace: S.trace, pair: S.pair };
 }
 async function saveSession() { if (S.analysis) OUT.download(await OUT.gzipJson(sessionData()), `uncanny_${OUT.stamp()}.uncanny`); }
@@ -1120,6 +1191,8 @@ function boot() {
   pick.onchange = () => { intake(pick.files); pick.value = ""; };
   $("#analyse").onclick = analyse; $("#cancel").onclick = () => { S.stop = true; };
   document.querySelectorAll("[data-lang]").forEach((b) => b.onclick = () => setLang(b.dataset.lang));
+  const paintLang = () => document.querySelectorAll("#langbtn [data-l]").forEach((x) => x.classList.toggle("on", x.dataset.l === getLang()));
+  $("#langbtn").onclick = () => setLang(getLang() === "es" ? "en" : "es"); onLang(paintLang); paintLang();
   document.querySelectorAll("#tabs .stab").forEach((b) => b.onclick = () => { S.view.tab = b.dataset.tab; renderSide(); });
   $("#infoh").onclick = () => { S.view.info = !S.view.info; renderSide(); };
   $("#legtab").onclick = () => setLeft(S.view.left === "legend" ? null : "legend");

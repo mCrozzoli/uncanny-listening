@@ -3,6 +3,8 @@
 // is two or three sentences for a listener ending on "in the data: <column>". Three tiers:
 //   CATALOGUE  real songs (click = hear + see + select): the most typical song of each class, the one on the boundary, the
 //              strongest disagreements, and the song highest on each of her descriptors
+//   WALKS      (Miguel 10-29) listening walks, catalogue-style: the disagreement lists (label ≠ k-means / model / both,
+//              near the boundary) and walking the boundary; ▶ plays them one after another, a name plays that song
 //   HEAR       select a song, then HOLD a chip: you hear THIS song's own 10-s segment where that descriptor is lowest / highest
 //              (the song stays the same, only the moment changes); release returns you to what was playing
 //   SEE        the encodings: colour (the current colouring, with counts), rings, the boundary, the trace, the strips
@@ -33,15 +35,24 @@ export function renderLegend(root, ctx) {
   const kd = songs.filter((x) => x.km !== labelOf(x)); if (kd.length) cat.push([t("lg_kmeans"), kd[0], labelOf(kd[0])]);
   for (const [col, fam] of HEARX) { const s = best(() => true, (a, b) => b.l0[col] - a.l0[col]); if (s) cat.push([t("lg_hi_" + fam), s, null]); }
 
+  const walks = ctx.walks ? ctx.walks() : [];
   // SEE — the current colouring
   const cnt = (f) => songs.filter(f).length, mode = ctx.colourMode, cat4 = ctx.cat4;
   const colourRows = mode === "agree"
     ? [[ctx.dim, t("a_all"), 0], [cat4[1], t("a_km"), 1], [cat4[2], t("a_model"), 2], [cat4[3], t("a_both"), 3]].map(([c, l, a]) => `<span class="lg-key"><i class="dot ${a === 3 ? "ring" : ""}" style="background:${c}"></i>${l} <span class="k">${cnt((s) => ctx.agreeCat(s) === a)}</span></span>`).join("")
     : A.classes.map((c, i) => `<span class="lg-key"><i class="dot" style="background:${C[i]}"></i>${esc(c)} <span class="k">${cnt((s) => (mode === "km" ? s.km : mode === "model" ? s.pred : labelOf(s)) === i)}</span></span>`).join("");
 
-  root.innerHTML = `<div class="lg-h"><b>${t("legend_title")}</b></div>
-  <section class="lg-sec"><div class="lg-st">${t("lg_catalogue")}</div>
+  root.innerHTML = `<section class="lg-sec"><div class="lg-st">${t("lg_catalogue")}</div>
     <div class="lg-chips">${cat.map(([label, s, ci], k) => chip(`data-cat="${k}"`, `${ci != null ? `<i class="dot" style="background:${C[ci]}"></i>` : ""}${esc(label)}`, s.name.replace(/\.[a-z0-9]+$/i, "").slice(0, 34))).join("")}</div></section>
+  ${walks.length ? `<section class="lg-sec"><div class="lg-st">${t("lg_walks")}</div>
+    <div class="k small">${t("lg_walks_how")}</div>
+    ${walks.map((w) => `<div class="lg-row"><details class="lg-walk"><summary><b>${esc(w.label)}</b> <span class="k">${w.ids.length}</span>
+        ${w.ids.length ? chip(`data-walk="${w.key}"`, `▶ ${t("walk")}`) : ""}</summary>
+        <ol>${w.ids.map((id) => `<li data-song="${id}">${esc(ctx.songName(id).replace(/\.[a-z0-9]+$/i, ""))}</li>`).join("")}</ol></details></div>`).join("")}
+    <div class="lg-row"><div class="lg-name"><b>${t("lg_wb")}</b></div>
+      <div class="lg-chips">${["across", "uncertain", "disagree"].map((m) => chip(`data-wb="${m}"`, `▶ ${t("wb_" + m)}`)).join("")}</div>
+      <div class="k small">${t("wb_note")}</div></div>
+  </section>` : ""}
   <section class="lg-sec"><div class="lg-st">${t("lg_hear")}</div>
     <div class="k small">${sel ? `${t("lg_hearing")} <b>${esc(sel.name)}</b>` : t("lg_select_first")}</div>
     ${HEARX.map(([col, fam, unit]) => { const v = songs.map((s) => s.l0[col]), lo = Math.min(...v), hi = Math.max(...v);
@@ -58,6 +69,9 @@ export function renderLegend(root, ctx) {
     <div class="lg-row"><div class="lg-name"><span class="lg-sym strip"></span><b>${t("lg_strip")}</b> · ${t("lg_strip_m")} ${info("s_strip", t("lg_i_strip"), "rms_mean")}</div></div>
   </section>`;
   root.querySelectorAll("[data-i]").forEach((b) => b.onclick = () => { const id = b.dataset.i; open.has(id) ? open.delete(id) : open.add(id); renderLegend(root, ctx); });
+  root.querySelectorAll("[data-walk]").forEach((b) => b.onclick = (e) => { e.preventDefault(); ctx.walk(b.dataset.walk); });
+  root.querySelectorAll("[data-wb]").forEach((b) => b.onclick = () => ctx.walkB(b.dataset.wb));
+  root.querySelectorAll("[data-song]").forEach((li) => li.onclick = () => ctx.hearSong(+li.dataset.song));
   root.querySelectorAll("[data-cat]").forEach((b) => b.onclick = () => { const [, s, ci] = cat[+b.dataset.cat]; ctx.pick(s, ci); });
   root.querySelectorAll("[data-hold]").forEach((b) => {
     let release = null;
